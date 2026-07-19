@@ -132,7 +132,9 @@ def test_opportunity_create_synchronous_contract(client, db):
     workflows = db.scalars(select(SelfTapeWorkflow).where(SelfTapeWorkflow.opportunity_id == self_tape_id)).all()
     assert len(workflows) == 1
     assert workflows[0].submission_id is None
-    assert workflows[0].tape_due_at.isoformat().startswith("2026-07-30T18:00:00")
+    assert workflows[0].tape_due_at == datetime.fromisoformat(
+    "2026-07-30T18:00:00-04:00"
+)
     calendar = db.scalars(select(AuditionCalendarEvent).where(AuditionCalendarEvent.opportunity_id == self_tape_id)).all()
     assert len(calendar) == 1 and calendar[0].event_type == "Self-Tape Due"
     assert client.get(f"{API}/operations/dashboard").json() != before_operations
@@ -1429,14 +1431,18 @@ def test_audition_calendar_and_journal_contracts(client):
     events = calendar.json()
     assert events
     deadline = next(item for item in events if item["opportunity_id"] == opportunity["id"])
-    assert deadline["start_datetime"].startswith("2026-03-08T01:30:00")
+    assert datetime.fromisoformat(
+        deadline["start_datetime"].replace("Z", "+00:00")
+    ) == datetime.fromisoformat("2026-03-08T01:30:00-05:00")
+
     changed = client.patch(
         f"{API}/operations/calendar/events/{deadline['id']}",
         json={"start_datetime": "2026-03-08T03:30:00-04:00"},
     )
     assert changed.status_code == 200
-    assert changed.json()["start_datetime"].startswith("2026-03-08T03:30:00")
-
+    assert datetime.fromisoformat(
+        changed.json()["start_datetime"].replace("Z", "+00:00")
+    ) == datetime.fromisoformat("2026-03-08T03:30:00-04:00")
 
 def test_opportunity_delete_protects_linked_submission_history(client):
     actor = create_actor(client)
@@ -1581,7 +1587,10 @@ def test_breakdown_mutation_side_effect_contracts(client):
     workflows = client.get(f"{API}/command-center/self-tapes").json()
     assert len(workflows) == 1
     workflow_id = workflows[0]["id"]
-    assert workflows[0]["tape_due_at"].startswith("2026-03-12T18:00:00")
+
+    assert datetime.fromisoformat(
+        workflows[0]["tape_due_at"].replace("Z", "+00:00")
+    ) == datetime.fromisoformat("2026-03-12T18:00:00-04:00")
     assert client.get(f"{API}/journal").json() == initial_journal
     assert client.get(f"{API}/operations/calendar/events").json() == initial_calendar
 
