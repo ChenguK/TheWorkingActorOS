@@ -14,6 +14,8 @@ const routes = [
   ["Settings", "/settings"]
 ] as const;
 
+test.describe.configure({ mode: "serial" });
+
 async function waitForRoute(page: Page, path: string, startedAt = Date.now()) {
   await expect(page).toHaveURL(new RegExp(`${path === "/" ? "/?$" : `${path}(?:\\?.*)?$`}`));
   await expect(page.getByRole("navigation", { name: "Primary workflow navigation" })).toBeVisible();
@@ -98,40 +100,65 @@ test("live route queries still refetch on immediate return", async ({ page }) =>
   expect(endpointCounts(state, commandStart)["GET /command-center"]).toBe(1);
 });
 
-test("fresh Category B aggregates and Journal history skip immediate-return requests", async ({ page }) => {
-  const state = await installMockApi(page);
-  await page.goto("/analytics");
-  await waitForRoute(page, "/analytics");
-  await page.getByRole("link", { name: "Settings" }).click();
-  await waitForRoute(page, "/settings");
-  const analyticsStart = state.requests.length;
-  await page.getByRole("link", { name: "Analytics" }).click();
-  await waitForRoute(page, "/analytics");
-  const analytics = endpointCounts(state, analyticsStart);
-  console.info(`immediate-return Analytics: ${JSON.stringify(analytics)}`);
-  expect(analytics["GET /intelligence/dashboard"] ?? 0).toBe(0);
-  expect(analytics["GET /intelligence/materials/performance"] ?? 0).toBe(0);
-  expect(analytics["GET /operations/dashboard"]).toBe(1);
+test.describe.serial("immediate-return request graphs", () => {
+  test(
+    "fresh Category B aggregates and Journal history skip immediate-return requests",
+    async ({ page }) => {
+      await page.addInitScript(() => {
+        const fixedNow = new Date("2026-03-07T15:00:00-05:00").getTime();
+        Date.now = () => fixedNow;
+      });
+      
+      const state = await installMockApi(page);
 
-  await page.getByRole("link", { name: "Journal" }).click();
-  await waitForRoute(page, "/journal");
-  await page.getByRole("link", { name: "Settings" }).click();
-  await waitForRoute(page, "/settings");
-  const journalStart = state.requests.length;
-  await page.getByRole("link", { name: "Journal" }).click();
-  await waitForRoute(page, "/journal");
-  const journal = endpointCounts(state, journalStart);
-  console.info(`immediate-return Journal: ${JSON.stringify(journal)}`);
-  expect(journal["GET /journal"] ?? 0).toBe(0);
+      await page.goto("/analytics");
+      await waitForRoute(page, "/analytics");
 
-  await page.getByRole("link", { name: "Career Intelligence" }).click();
-  await waitForRoute(page, "/career");
-  await page.getByRole("link", { name: "Materials" }).click();
-  await waitForRoute(page, "/materials");
-  const careerStart = state.requests.length;
-  await page.getByRole("link", { name: "Career Intelligence" }).click();
-  await waitForRoute(page, "/career");
-  const career = endpointCounts(state, careerStart);
-  console.info(`immediate-return Career: ${JSON.stringify(career)}`);
-  expect(career["GET /career-development/tasks"] ?? 0).toBeLessThanOrEqual(1);
+      await page.getByRole("link", { name: "Settings" }).click();
+      await waitForRoute(page, "/settings");
+
+      const analyticsStart = state.requests.length;
+
+      await page.getByRole("link", { name: "Analytics" }).click();
+      await waitForRoute(page, "/analytics");
+
+      const analytics = endpointCounts(state, analyticsStart);
+
+      expect(analytics["GET /intelligence/dashboard"] ?? 0).toBe(0);
+      expect(analytics["GET /intelligence/materials/performance"] ?? 0).toBe(0);
+      expect(analytics["GET /operations/dashboard"]).toBe(1);
+
+      await page.getByRole("link", { name: "Journal" }).click();
+      await waitForRoute(page, "/journal");
+
+      await page.getByRole("link", { name: "Settings" }).click();
+      await waitForRoute(page, "/settings");
+
+      const journalStart = state.requests.length;
+
+      await page.getByRole("link", { name: "Journal" }).click();
+      await waitForRoute(page, "/journal");
+
+      const journal = endpointCounts(state, journalStart);
+
+      expect(journal["GET /journal"] ?? 0).toBe(0);
+
+      await page.getByRole("link", { name: "Career Intelligence" }).click();
+      await waitForRoute(page, "/career");
+
+      await page.getByRole("link", { name: "Materials" }).click();
+      await waitForRoute(page, "/materials");
+
+      const careerStart = state.requests.length;
+
+      await page.getByRole("link", { name: "Career Intelligence" }).click();
+      await waitForRoute(page, "/career");
+
+      const career = endpointCounts(state, careerStart);
+
+      expect(
+        career["GET /career-development/tasks"] ?? 0
+      ).toBeLessThanOrEqual(1);
+    }
+  );
 });
