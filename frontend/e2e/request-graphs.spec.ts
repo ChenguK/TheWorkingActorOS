@@ -104,6 +104,11 @@ test.describe.serial("immediate-return request graphs", () => {
   test(
     "fresh Category B aggregates and Journal history skip immediate-return requests",
     async ({ page }) => {
+      await page.addInitScript(() => {
+        const fixedNow = new Date("2026-03-07T15:00:00-05:00").getTime();
+        Date.now = () => fixedNow;
+      });
+      
       const state = await installMockApi(page);
 
       await page.goto("/analytics");
