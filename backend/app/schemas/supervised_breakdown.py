@@ -12,6 +12,7 @@ class SupervisedBrowserStart(BaseModel):
 
 
 class SupervisedBrowserStatus(BaseModel):
+    available: bool = True
     active: bool
     platform_name: str | None = None
     current_url: str | None = None
@@ -33,7 +34,9 @@ class SupervisedBreakdownImportRead(TimestampedModel):
 
 class SupervisedBreakdownImportUpdate(BaseModel):
     parsed_data_json: dict | None = None
-    import_status: str | None = Field(default=None, pattern="^(Draft|Approved|Rejected|Needs Review|Blocked)$")
+    import_status: str | None = Field(
+        default=None, pattern="^(Draft|Approved|Rejected|Needs Review|Blocked)$"
+    )
 
 
 class SupervisedBreakdownApproveRead(BaseModel):

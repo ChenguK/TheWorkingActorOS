@@ -88,6 +88,8 @@ export type SystemCapabilities = {
     notifications_configured: boolean;
     source_discovery_configured: boolean;
     public_profile_import_configured: boolean;
+    supervised_browser_available: boolean;
+    portfolio_demo: boolean;
   };
   states: Record<string, CapabilityState>;
   integrations: Array<{

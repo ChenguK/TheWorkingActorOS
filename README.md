@@ -1,5 +1,7 @@
 # The Working Actor OS
 
+> **Portfolio deployment posture:** The deployed portfolio is a sanitized, single-actor demonstration, not a multi-user SaaS product. Authentication and authorization are not implemented. Its backend must use one explicitly configured frontend CORS origin; CORS limits browser origins but is not identity protection. Supervised browser automation is local-development-only, and external providers remain disabled in `portfolio_demo` mode. Use no real private actor data or production credentials in the public demo.
+
 Your AI-powered career operating system.
 
 The Working Actor OS helps actors manage breakdowns, auditions, materials, relationships, analytics, and career strategy in one AI-powered workspace.

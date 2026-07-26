@@ -11,7 +11,10 @@ from app.schemas.supervised_breakdown import (
     SupervisedBrowserStart,
     SupervisedBrowserStatus,
 )
-from app.services.supervised_breakdown_import_service import SupervisedBreakdownImportService
+from app.services.supervised_breakdown_import_service import (
+    SupervisedBreakdownImportService,
+    SupervisedBrowserDisabledError,
+)
 
 router = APIRouter()
 
@@ -25,6 +28,14 @@ def list_supervised_imports(db: Session = Depends(get_db)):
 def start_supervised_browser(payload: SupervisedBrowserStart, db: Session = Depends(get_db)):
     try:
         return SupervisedBreakdownImportService(db).start_browser(payload.platform_name)
+    except SupervisedBrowserDisabledError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "supervised_browser_disabled",
+                "message": str(exc),
+            },
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -43,6 +54,14 @@ def close_supervised_browser(db: Session = Depends(get_db)):
 def import_current_supervised_page(db: Session = Depends(get_db)):
     try:
         return SupervisedBreakdownImportService(db).import_current_page()
+    except SupervisedBrowserDisabledError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "supervised_browser_disabled",
+                "message": str(exc),
+            },
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(
             status_code=409,

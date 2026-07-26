@@ -5,8 +5,6 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import (
     ActorProfile,
-    Asset,
-    CastingOffice,
     DiscoveryProviderSettings,
     Opportunity,
     SourceResearchItem,
@@ -48,6 +46,7 @@ class CapabilityService:
     def integration_statuses(self, flags: dict[str, bool] | None = None) -> list[dict]:
         settings = get_settings()
         flags = flags or self.flags()
+        supervised_browser_status = self._supervised_browser_status(settings)
         travel = TravelService(self.db).provider_status()
         openrouteservice_configured = bool(settings.openrouteservice_api_key)
         openrouteservice_active = str(settings.travel_provider or "manual").lower() in {
@@ -72,7 +71,9 @@ class CapabilityService:
             {
                 "id": "openrouteservice",
                 "name": "OpenRouteService API",
-                "status": "Configured" if openrouteservice_configured and openrouteservice_active else "Not Configured",
+                "status": "Configured"
+                if openrouteservice_configured and openrouteservice_active
+                else "Not Configured",
                 "configured": openrouteservice_configured and openrouteservice_active,
                 "what_it_enables": "Geocoding and drive-time estimates through OpenRouteService.",
                 "fallback_behavior": "Manual drive-time estimate.",
@@ -115,16 +116,32 @@ class CapabilityService:
             {
                 "id": "public_profile_import",
                 "name": "Public Profile Import",
-                "status": "Configured" if flags["public_profile_import_configured"] else "Not Configured",
+                "status": "Configured"
+                if flags["public_profile_import_configured"]
+                else "Not Configured",
                 "configured": flags["public_profile_import_configured"],
                 "what_it_enables": "User-triggered draft imports from public/shareable links, pasted text, PDFs, screenshots, CSV, or guided forms.",
                 "fallback_behavior": "Manual Entry Required.",
                 "setup_instructions": "Keep PUBLIC_PROFILE_IMPORT_ENABLED=true in the backend .env. Imports remain draft-first and user approved.",
             },
             {
+                "id": "supervised_browser",
+                "name": "Supervised Browser Import",
+                "status": supervised_browser_status,
+                "configured": flags["supervised_browser_available"],
+                "what_it_enables": "A user-controlled local browser for manually navigating to one breakdown before importing visible page text.",
+                "fallback_behavior": "Manual breakdown entry or pasted breakdown text.",
+                "setup_instructions": (
+                    "Available only when ENVIRONMENT is local development and SUPERVISED_BROWSER_ENABLED=true. "
+                    "It is disabled in the sanitized portfolio demo."
+                ),
+            },
+            {
                 "id": "source_discovery",
                 "name": "Source Discovery",
-                "status": "Configured" if flags["source_discovery_configured"] else "Not Configured",
+                "status": "Configured"
+                if flags["source_discovery_configured"]
+                else "Not Configured",
                 "configured": flags["source_discovery_configured"],
                 "what_it_enables": "User-triggered discovery against approved active public breakdown sources and configured public web search.",
                 "fallback_behavior": "Manual breakdown entry and source approval workflow.",
@@ -136,7 +153,9 @@ class CapabilityService:
             {
                 "id": "parallel_public_web_search",
                 "name": "Parallel Public Web Search",
-                "status": "Configured" if self._public_web_search_configured() else "Not Configured",
+                "status": "Configured"
+                if self._public_web_search_configured()
+                else "Not Configured",
                 "configured": self._public_web_search_configured(),
                 "what_it_enables": "User-triggered public web search for active public Film/TV acting breakdowns.",
                 "fallback_behavior": "Only approved active sources are searched.",
@@ -148,27 +167,24 @@ class CapabilityService:
         settings = get_settings()
         travel = TravelService(self.db).provider_status()
         return {
-            "travel_provider_configured": bool(travel["configured"] and travel["provider"] != "manual"),
+            "travel_provider_configured": bool(
+                travel["configured"] and travel["provider"] != "manual"
+            ),
             "ai_configured": bool(settings.openai_api_key),
             "scheduler_configured": bool(settings.scheduler_enabled),
-            "notifications_configured": bool(settings.notifications_enabled and settings.scheduler_enabled),
+            "notifications_configured": bool(
+                settings.notifications_enabled and settings.scheduler_enabled
+            ),
             "source_discovery_configured": self._source_discovery_configured(),
             "public_profile_import_configured": bool(settings.public_profile_import_enabled),
+            "supervised_browser_available": settings.supervised_browser_available,
+            "portfolio_demo": settings.is_portfolio_demo,
         }
 
     def feature_states(self) -> dict:
         actor = self.db.scalars(select(ActorProfile).limit(1)).first()
-        breakdowns = self._count(Opportunity, Opportunity.is_demo_data.is_(False))
-        visible_breakdowns = self._count(
-            Opportunity,
-            Opportunity.is_demo_data.is_(False),
-            Opportunity.visibility_status == "visible",
-            Opportunity.breakdown_classification.in_(MAIN_BREAKDOWN_CLASSIFICATIONS),
-        )
         submissions = self._count(Submission)
         outcome_submissions = self._outcome_submission_count()
-        assets = self._count(Asset)
-        offices = self._count(CastingOffice)
         travel = TravelService(self.db).provider_status()
         flags = self.flags()
         data_threshold = {
@@ -187,7 +203,9 @@ class CapabilityService:
                 "Manual Override",
             ),
             "geocoding": self._state(
-                "Configured" if travel["configured"] and travel["provider"] != "manual" else "Not Configured",
+                "Configured"
+                if travel["configured"] and travel["provider"] != "manual"
+                else "Not Configured",
                 "Geocoding requires a configured travel provider API key.",
                 "Connect Service",
             ),
@@ -236,6 +254,15 @@ class CapabilityService:
                 "Imports are user-triggered, draft-first, and fall back to copy/paste or uploads when pages block fetching.",
                 "Manual Entry Required",
             ),
+            "supervised_browser": self._state(
+                self._supervised_browser_status(get_settings()),
+                (
+                    "A user-controlled supervised browser is available only in local development."
+                    if flags["supervised_browser_available"]
+                    else "Remote supervised-browser execution is disabled. Use manual entry or pasted breakdown text."
+                ),
+                "Manual Entry Required",
+            ),
             "ai_assisted_tagging": self._state(
                 "Configured" if flags["ai_configured"] else "Not Configured",
                 "Material tagging uses AI only when an AI provider is configured; otherwise it uses deterministic filename/type suggestions.",
@@ -260,6 +287,15 @@ class CapabilityService:
 
     def _state(self, state: str, explanation: str, fallback: str) -> dict:
         return {"state": state, "explanation": explanation, "safe_fallback": fallback}
+
+    def _supervised_browser_status(self, settings) -> str:
+        if settings.supervised_browser_available:
+            return "Available Locally"
+        if settings.is_portfolio_demo:
+            return "Unavailable in Portfolio Demo"
+        if settings.is_local_environment:
+            return "Disabled by Configuration"
+        return "Unavailable"
 
     def _count(self, model, *criteria) -> int:
         statement = select(func.count()).select_from(model)
