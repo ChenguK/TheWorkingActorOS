@@ -2,7 +2,6 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Sparkles } from "lucide-react";
 import { Badge, Button, Field, Section, inputClass } from "../../../components/ui";
 import { SourceEditForm, SourceLibraryPanel, type SourceEditFormState, useActivateSourceResearchItem, useDiscoverNewSources, useRejectSourceResearchItem, useUpdateSourceResearchItem } from "../../source-library";
-import { useDiscoveryReport } from "../hooks/useBreakdownQueries";
 import type { AgentRecommendation, DiscoveryCoverage, DiscoveryMode, DiscoveryPlugin, DiscoveryReport, DiscoverySearchMode, Opportunity, SourceResearchItem, SubmissionAutomationQueueItem, SystemCapabilities } from "../types";
 import { discoverySearchModes } from "../constants";
 import { useBreakdownDiscovery } from "../hooks/useBreakdownDiscovery";
@@ -103,8 +102,6 @@ export function AutomationDashboard({
   const [discoveryStatus, setDiscoveryStatus] = useState<string | null>(null);
   const [discoveryCoverage, setDiscoveryCoverage] = useState<DiscoveryCoverage | null>(null);
   const [discoveryReport, setDiscoveryReport] = useState<DiscoveryReport | null>(null);
-  const savedDiscoveryReport = useDiscoveryReport();
-  const visibleDiscoveryReport = discoveryReport ?? savedDiscoveryReport.data ?? null;
   const [discoveryReportOpen, setDiscoveryReportOpen] = useState(false);
   const [publicWebScopeNote, setPublicWebScopeNote] = useState<string | null>(null);
   const [lastDiscoveryResult, setLastDiscoveryResult] = useState<{ mode: DiscoveryMode; total_visible: number } | null>(null);
@@ -323,12 +320,12 @@ export function AutomationDashboard({
                     {discoveryCoverage.suggested_sources_awaiting_approval}
                   </p>
                   <p>{publicWebScopeNote || discoveryCoverage.scope_note}</p>
-                  {visibleDiscoveryReport && (
+                  {discoveryReport && (
                     <div className="mt-2">
                       <TextAction onClick={() => setDiscoveryReportOpen((current) => !current)}>
                         {discoveryReportOpen ? "Hide Discovery Report" : "View Discovery Report"}
                       </TextAction>
-                      {discoveryReportOpen && <DiscoveryReportPanel report={visibleDiscoveryReport} />}
+                      {discoveryReportOpen && <DiscoveryReportPanel report={discoveryReport} />}
                     </div>
                   )}
                   {skippedSourceMessage && <p className="rounded bg-green-50 p-2 text-green-800">{skippedSourceMessage}</p>}

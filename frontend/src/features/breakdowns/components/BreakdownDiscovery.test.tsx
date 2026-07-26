@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithRouter, screen } from "../../../test/testUtils";
+import { api } from "../../../services/api";
 import type { DiscoveryRunResult, SystemCapabilities } from "../types";
 import { useBreakdownDiscovery, useSubmissionQueueActions } from "../hooks/useBreakdownDiscovery";
 import { AutomationDashboard } from "./BreakdownDiscovery";
@@ -7,6 +8,9 @@ import { AutomationDashboard } from "./BreakdownDiscovery";
 vi.mock("../hooks/useBreakdownDiscovery", () => ({
   useBreakdownDiscovery: vi.fn(),
   useSubmissionQueueActions: vi.fn()
+}));
+vi.mock("../../../services/api", () => ({
+  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }
 }));
 
 const capabilities = {
@@ -90,6 +94,32 @@ describe("AutomationDashboard discovery state", () => {
     renderDashboard();
 
     expect(screen.getByText("Discovery provider unavailable")).toBeInTheDocument();
+  });
+
+  it("does not request a standalone Discovery Report on initial render", () => {
+    vi.mocked(useBreakdownDiscovery).mockReturnValue({
+      discovering: false,
+      error: null,
+      clearError: vi.fn(),
+      run: vi.fn()
+    });
+
+    renderDashboard();
+
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it("preserves discovery loading state", () => {
+    vi.mocked(useBreakdownDiscovery).mockReturnValue({
+      discovering: true,
+      error: null,
+      clearError: vi.fn(),
+      run: vi.fn()
+    });
+
+    renderDashboard();
+
+    expect(screen.getByRole("button", { name: "Finding..." })).toBeDisabled();
   });
 
   it("loads and displays the Discovery Report returned by the feature hook", async () => {

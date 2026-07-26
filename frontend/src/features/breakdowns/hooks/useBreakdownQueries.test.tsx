@@ -12,7 +12,7 @@ import {
 vi.mock("../api", () => ({
   listBreakdowns: vi.fn(async () => []), listHiddenBreakdowns: vi.fn(async () => []), listBreakdownRecommendations: vi.fn(async () => []),
   listDiscoveryPlugins: vi.fn(async () => []), listSubmissionQueue: vi.fn(async () => []), listAuditionReadiness: vi.fn(async () => []),
-  listMaterialMatches: vi.fn(async () => []), getDiscoveryReport: vi.fn(async () => ({ candidates: [], top_rejection_reasons: {} })),
+  listMaterialMatches: vi.fn(async () => []),
   createBreakdown: vi.fn(async () => ({})), updateBreakdown: vi.fn(async () => ({})), deleteBreakdown: vi.fn(async () => ({})),
   approveActingBreakdown: vi.fn(async () => ({})), rejectBreakdown: vi.fn(async () => ({})), deepParseBreakdown: vi.fn(async () => ({})),
   parseBreakdownText: vi.fn(async () => ({})), refreshDemographicCheck: vi.fn(async () => ({})), generateBreakdownStrategy: vi.fn(async () => ({})),
@@ -61,8 +61,17 @@ describe("Breakdowns Query ownership", () => {
     const { result } = renderHook(() => useRunBreakdownDiscovery(), { wrapper: createTestQueryWrapper(client) });
     await act(async () => { await result.current.mutateAsync({ mode: "FilmTV", searchModes: ["Match My Profile"] }); });
     const keys = invalidate.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey));
-    expect(keys).toContain(JSON.stringify(["sourceLibrary", "list", { resource: "sources" }]));
-    expect(keys).toContain(JSON.stringify(breakdownKeys.discoveryReport));
+    expect(keys).toEqual([
+      breakdownKeys.opportunities,
+      breakdownKeys.hidden,
+      breakdownKeys.readiness,
+      breakdownKeys.materialMatches,
+      ["analytics", "list", { resource: "intelligenceDashboard" }],
+      ["analytics", "list", { resource: "industryTrends" }],
+      breakdownKeys.recommendations,
+      ["sourceLibrary", "list", { resource: "sources" }],
+      ["sourceLibrary", "list", { resource: "archive" }]
+    ].map((key) => JSON.stringify(key)));
   });
 
   it("invalidates only the queue after queue execution while Auditions remains transitional", async () => {
