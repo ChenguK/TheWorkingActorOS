@@ -18,6 +18,10 @@ from app.schemas.platform import (
     PublicProfileImportUpdate,
 )
 from app.services.platform_import_service import PlatformImportService
+from app.services.file_storage_service import (
+    PersistentFileStorageUnavailableError,
+    require_persistent_file_storage,
+)
 
 router = APIRouter()
 
@@ -92,6 +96,8 @@ def import_platform_profile_upload(
     db: Session = Depends(get_db),
 ):
     try:
+        if file is not None:
+            require_persistent_file_storage()
         return PlatformImportService(db).import_from_upload(
             actor_profile_id=actor_profile_id,
             platform_name=platform_name,
@@ -100,6 +106,17 @@ def import_platform_profile_upload(
             upload=file,
             raw_import_text=raw_import_text,
         )
+    except PersistentFileStorageUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "persistent_file_storage_unavailable",
+                "message": (
+                    "File uploads are disabled because durable storage is not configured. "
+                    "Paste profile text to create the draft instead."
+                ),
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

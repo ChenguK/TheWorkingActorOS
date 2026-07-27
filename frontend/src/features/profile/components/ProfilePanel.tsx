@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 import { errorMessage } from "../../../services/api/errors";
 import { useMaterialOptions } from "../../materials";
+import { useSystemCapabilities } from "../../../services/system";
 import { useActingCredits, useActorProfile, useEquipmentProfile, usePlatformAssetMappings, usePlatformProfiles, usePlatformSubscriptions, usePublicProfileImports, useRepresentations, useTravelPreferences } from "../hooks/useProfileQueries";
 import { ActingResumeBuilder } from "./ActingResumeBuilder";
 import { ActorProfilePanel } from "./ActorProfilePanel";
@@ -21,6 +22,7 @@ export function ProfilePanel() {
   const publicImports = usePublicProfileImports();
   const mappings = usePlatformAssetMappings();
   const materials = useMaterialOptions();
+  const capabilities = useSystemCapabilities();
   const queries = [actor, representations, travel, credits, subscriptions, equipment, profiles, publicImports, mappings, materials];
   const initialError = queries.find((query) => query.error && !query.data)?.error;
 
@@ -42,7 +44,7 @@ export function ProfilePanel() {
       <ProfileSectionState label="platform subscriptions" loading={subscriptions.isLoading} error={subscriptions.error}><ProfileSubscriptionsPanel subscriptions={subscriptions.data ?? []} /></ProfileSectionState>
       <ProfileSectionState label="professional capabilities" loading={equipment.isLoading} error={equipment.error}><ProfessionalCapabilitiesPanel actor={actor.data ?? null} equipmentProfile={equipment.data ?? null} /></ProfileSectionState>
       <ProfileSectionState label="acting credits" loading={credits.isLoading} error={credits.error}><ActingResumeBuilder actor={actor.data ?? null} credits={credits.data ?? []} /></ProfileSectionState>
-      <ProfileSectionState label="platform imports" loading={[profiles, publicImports, mappings, materials].some((query) => query.isLoading)} error={profiles.error ?? publicImports.error ?? mappings.error ?? materials.error}><PlatformProfileImportAssistant actor={actor.data ?? null} assets={materials.data ?? []} profiles={profiles.data ?? []} publicImports={publicImports.data ?? []} mappings={mappings.data ?? []} /></ProfileSectionState>
+      <ProfileSectionState label="platform imports" loading={[profiles, publicImports, mappings, materials].some((query) => query.isLoading)} error={profiles.error ?? publicImports.error ?? mappings.error ?? materials.error}><PlatformProfileImportAssistant actor={actor.data ?? null} assets={materials.data ?? []} profiles={profiles.data ?? []} publicImports={publicImports.data ?? []} mappings={mappings.data ?? []} capabilities={capabilities.data ?? null} /></ProfileSectionState>
     </div>
   );
 }

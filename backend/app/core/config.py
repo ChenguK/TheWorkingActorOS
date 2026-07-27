@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://casting:casting@localhost:5432/casting_intelligence"
     cors_origins: str = "http://localhost:5173"
     upload_dir: Path = Path("./storage/uploads")
+    durable_file_storage_enabled: bool | None = None
     travel_provider: str = "manual"
     google_maps_api_key: str | None = None
     mapbox_access_token: str | None = None
@@ -43,6 +44,12 @@ class Settings(BaseSettings):
     @property
     def supervised_browser_available(self) -> bool:
         return self.is_local_environment and self.supervised_browser_enabled
+
+    @property
+    def persistent_file_storage_available(self) -> bool:
+        if self.durable_file_storage_enabled is not None:
+            return self.durable_file_storage_enabled
+        return self.is_local_environment
 
     @property
     def cors_origin_list(self) -> list[str]:

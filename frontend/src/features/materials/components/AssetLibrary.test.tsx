@@ -87,6 +87,46 @@ describe("AssetLibrary server state", () => {
     expect(listMaterials).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps hosted demo materials readable without exposing file mutations", async () => {
+    vi.mocked(listMaterials).mockResolvedValue([assetFixture()]);
+    renderWithRouter(
+      <AssetLibrary
+        actor={actorFixture()}
+        capabilities={{
+          flags: {
+            ai_configured: false,
+            persistent_file_storage_available: false
+          }
+        } as never}
+      />
+    );
+
+    expect(await screen.findByText("Warm Authority Headshot")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upload Material" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.getByText(/File uploads are disabled in the hosted demo/)).toBeInTheDocument();
+    expect(uploadMaterial).not.toHaveBeenCalled();
+  });
+
+  it("preserves upload controls when persistent storage is available", async () => {
+    renderWithRouter(
+      <AssetLibrary
+        actor={actorFixture()}
+        capabilities={{
+          flags: {
+            ai_configured: false,
+            persistent_file_storage_available: true
+          }
+        } as never}
+      />
+    );
+
+    expect(await screen.findByRole("button", { name: "Upload" })).toBeInTheDocument();
+    expect(screen.getByLabelText("File")).toBeInTheDocument();
+    expect(screen.queryByText(/File uploads are disabled/)).not.toBeInTheDocument();
+  });
+
   it("preserves an upload draft and backend message after API failure", async () => {
     vi.mocked(uploadMaterial).mockRejectedValue(new ApiError({ message: "Unsupported upload", status: 422 }));
     const { user } = renderWithRouter(<AssetLibrary actor={actorFixture()} />);

@@ -11,8 +11,15 @@ from fastapi import FastAPI, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.testclient import TestClient
 
+from app.api.v1.routes.assets import create_asset as create_asset_route
+from app.api.v1.routes.assets import view_asset_file
+from app.api.v1.routes.platform_imports import import_platform_profile_upload
+from app.api.v1.routes.representation import generated_resume_file
 from app.services.asset_service import AssetService
-from app.services.file_storage_service import FileStorageService
+from app.services.file_storage_service import (
+    FileStorageService,
+    PersistentFileStorageUnavailableError,
+)
 from app.services.resume_pdf_service import ResumePdfService
 
 
@@ -88,7 +95,7 @@ def test_successful_upload_persists_file_metadata_and_download_bytes_inside_root
     assert response.content == b"portfolio asset"
 
 
-def test_database_failure_after_file_write_leaves_orphaned_file(tmp_path):
+def test_database_failure_after_file_write_removes_orphaned_file(tmp_path):
     root = tmp_path / "uploads"
     service, db, repo = asset_service(root)
     repo.add.side_effect = RuntimeError("database insert failed")
@@ -96,7 +103,8 @@ def test_database_failure_after_file_write_leaves_orphaned_file(tmp_path):
     with pytest.raises(RuntimeError, match="database insert failed"):
         create_asset(service)
 
-    assert [path.read_bytes() for path in root.iterdir()] == [b"portfolio asset"]
+    assert list(root.iterdir()) == []
+    db.rollback.assert_called_once()
     db.commit.assert_not_called()
 
 
@@ -149,15 +157,24 @@ def test_file_delete_failure_occurs_after_database_commit(tmp_path):
     db.commit.assert_called_once()
 
 
-def test_missing_file_response_is_an_unhandled_server_error(tmp_path):
-    app = FastAPI()
+def test_missing_asset_file_returns_stable_not_found(tmp_path):
+    asset = SimpleNamespace(
+        local_file_path=str(tmp_path / "missing.pdf"),
+        mime_type="application/pdf",
+        original_filename="missing.pdf",
+        asset_name="Missing",
+    )
+    with (
+        patch("app.api.v1.routes.assets.AssetService") as service,
+        patch("app.api.v1.routes.assets.FileStorageService") as storage,
+    ):
+        service.return_value.get.return_value = asset
+        storage.return_value.existing_file.side_effect = FileNotFoundError
+        with pytest.raises(Exception) as error:
+            view_asset_file(uuid4(), MagicMock())
 
-    @app.get("/missing")
-    def missing():
-        return FileResponse(tmp_path / "missing.pdf")
-
-    response = TestClient(app, raise_server_exceptions=False).get("/missing")
-    assert response.status_code == 500
+    assert error.value.status_code == 404
+    assert error.value.detail["code"] == "asset_file_not_found"
 
 
 def test_restart_with_same_root_preserves_bytes_but_empty_replacement_root_does_not(tmp_path):
@@ -184,7 +201,7 @@ def test_restart_with_same_root_preserves_bytes_but_empty_replacement_root_does_
     assert not (replacement.upload_dir / Path(stored_path).name).exists()
 
 
-def test_storage_initialization_creates_directories_and_delete_accepts_outside_paths(tmp_path):
+def test_storage_initialization_creates_directories_and_rejects_outside_paths(tmp_path):
     root = tmp_path / "uploads"
     outside = tmp_path / "outside.txt"
     outside.write_text("outside")
@@ -194,10 +211,96 @@ def test_storage_initialization_creates_directories_and_delete_accepts_outside_p
         return_value=storage_settings(root),
     ):
         storage = FileStorageService()
-        storage.delete_file(str(outside))
+        with pytest.raises(ValueError, match="outside"):
+            storage.delete_file(str(outside))
 
     assert root.is_dir()
-    assert not outside.exists()
+    assert outside.exists()
+
+
+def test_disabled_upload_route_rejects_before_storage_or_database_work(tmp_path):
+    db = MagicMock()
+    with (
+        patch(
+            "app.api.v1.routes.assets.require_persistent_file_storage",
+            side_effect=PersistentFileStorageUnavailableError,
+        ),
+        patch("app.api.v1.routes.assets.AssetService") as service,
+    ):
+        with pytest.raises(Exception) as error:
+            create_asset_route(
+                actor_profile_id=uuid4(),
+                asset_name="Portfolio Headshot",
+                asset_type="Headshot",
+                file=upload(),
+                db=db,
+            )
+
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "persistent_file_storage_unavailable"
+    service.assert_not_called()
+    db.add.assert_not_called()
+    assert not (tmp_path / "uploads").exists()
+
+
+def test_disabled_platform_file_import_preserves_text_only_fallback():
+    db = MagicMock()
+    with (
+        patch(
+            "app.api.v1.routes.platform_imports.require_persistent_file_storage",
+            side_effect=PersistentFileStorageUnavailableError,
+        ),
+        patch("app.api.v1.routes.platform_imports.PlatformImportService") as service,
+    ):
+        with pytest.raises(Exception) as error:
+            import_platform_profile_upload(
+                platform_name="Actors Access",
+                import_method="Manual Copy/Paste",
+                file=upload("resume.pdf"),
+                db=db,
+            )
+
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "persistent_file_storage_unavailable"
+    service.assert_not_called()
+
+    with patch("app.api.v1.routes.platform_imports.PlatformImportService") as service:
+        service.return_value.import_from_upload.return_value = "text draft"
+        result = import_platform_profile_upload(
+            platform_name="Actors Access",
+            import_method="Manual Copy/Paste",
+            raw_import_text="Sanitized profile text",
+            file=None,
+            db=db,
+        )
+    assert result == "text draft"
+
+
+def test_generated_resume_download_repairs_metadata_after_ephemeral_restart(tmp_path):
+    actor_id = uuid4()
+    stale = SimpleNamespace(local_file_path=str(tmp_path / "missing.pdf"))
+    fresh_path = tmp_path / "replacement.pdf"
+    fresh_path.write_bytes(b"replacement")
+    fresh = SimpleNamespace(local_file_path=str(fresh_path))
+    db = MagicMock()
+
+    with (
+        patch("app.api.v1.routes.representation.RepresentationService") as representation,
+        patch("app.api.v1.routes.representation.FileStorageService") as storage,
+        patch("app.api.v1.routes.representation.ResumePdfService") as resumes,
+    ):
+        representation.return_value.get_or_create_generated_resume.return_value = stale
+        storage.return_value.existing_file.side_effect = [
+            FileNotFoundError,
+            fresh_path,
+        ]
+        resumes.return_value.current_generated_resume.return_value = fresh
+        asset, path = generated_resume_file(actor_id, "pdf", db)
+
+    assert asset is fresh
+    assert path == fresh_path
+    resumes.return_value.regenerate_for_actor.assert_called_once_with(actor_id)
+    db.commit.assert_called_once()
 
 
 def test_generated_resume_files_are_persistent_assets_under_upload_root(tmp_path):

@@ -55,6 +55,19 @@ def test_local_mode_keeps_supervised_browser_available():
         assert service.start_browser("Actors Access") == {"active": True}
 
     start.assert_called_once_with("Actors Access")
+    assert settings.persistent_file_storage_available is True
+
+
+def test_remote_file_storage_requires_explicit_durable_configuration():
+    assert portfolio_settings().persistent_file_storage_available is False
+    assert (
+        portfolio_settings(durable_file_storage_enabled=True).persistent_file_storage_available
+        is True
+    )
+    assert (
+        local_settings(durable_file_storage_enabled=False).persistent_file_storage_available
+        is False
+    )
 
 
 def test_portfolio_mode_disables_browser_operations_without_touching_playwright():
@@ -181,11 +194,18 @@ def test_capability_output_matches_local_and_portfolio_route_behavior():
     assert local_flags["portfolio_demo"] is False
     assert local_browser["status"] == "Available Locally"
     assert portfolio_flags["supervised_browser_available"] is False
+    assert local_flags["persistent_file_storage_available"] is True
+    assert portfolio_flags["persistent_file_storage_available"] is False
     assert portfolio_flags["portfolio_demo"] is True
     assert portfolio_browser["status"] == "Unavailable in Portfolio Demo"
     assert (
         portfolio_browser["fallback_behavior"] == "Manual breakdown entry or pasted breakdown text."
     )
+    portfolio_storage = next(
+        item for item in portfolio_integrations if item["id"] == "persistent_file_storage"
+    )
+    assert portfolio_storage["configured"] is False
+    assert portfolio_storage["status"] == "Not Configured"
 
 
 def test_local_configuration_can_explicitly_disable_supervised_browser():

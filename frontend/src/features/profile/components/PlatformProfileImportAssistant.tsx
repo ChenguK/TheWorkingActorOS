@@ -16,6 +16,7 @@ import type {
   ProfessionalEquipmentProfile,
   PublicProfileImport,
   Representation,
+  SystemCapabilities,
   TravelPreference
 } from "../../../types/domain";
 import type { MaterialOption } from "../../materials";
@@ -28,14 +29,17 @@ export function PlatformProfileImportAssistant({
   assets,
   profiles,
   publicImports,
-  mappings
+  mappings,
+  capabilities
 }: {
   actor: ActorProfile | null;
   assets: MaterialOption[];
   profiles: PlatformProfile[];
   publicImports: PublicProfileImport[];
   mappings: PlatformAssetMapping[];
+  capabilities?: SystemCapabilities | null;
 }) {
+  const persistentStorageAvailable = capabilities?.flags.persistent_file_storage_available ?? true;
   const publicImportMutation = useImportPublicProfile();
   const uploadMutation = useImportProfileUpload();
   const publicActionMutation = usePublicImportAction();
@@ -84,8 +88,12 @@ export function PlatformProfileImportAssistant({
     event.preventDefault();
     setDraftImportMessage(null);
     setDraftImportError(null);
-    if (!draftFile && !draftForm.raw_import_text.trim()) {
-      setDraftImportError("Upload a file, paste profile text, or provide both before creating a draft.");
+    if ((!persistentStorageAvailable || !draftFile) && !draftForm.raw_import_text.trim()) {
+      setDraftImportError(
+        persistentStorageAvailable
+          ? "Upload a file, paste profile text, or provide both before creating a draft."
+          : "Paste profile text before creating a draft in the hosted demo."
+      );
       return;
     }
     const data = new FormData();
@@ -94,7 +102,7 @@ export function PlatformProfileImportAssistant({
     data.set("profile_url", draftForm.profile_url);
     data.set("import_method", draftForm.import_method);
     data.set("raw_import_text", draftForm.raw_import_text);
-    if (draftFile) data.set("file", draftFile);
+    if (persistentStorageAvailable && draftFile) data.set("file", draftFile);
     setDraftImportSaving(true);
     try {
       const saved = await uploadMutation.mutateAsync(data);
@@ -236,6 +244,7 @@ export function PlatformProfileImportAssistant({
                 name="platform_import_file"
                 className={inputClass}
                 type="file"
+                disabled={!persistentStorageAvailable}
                 accept=".pdf,.csv,.txt,.png,.jpg,.jpeg,.webp"
                 onChange={(e) => {
                   setDraftFile(e.target.files?.[0] ?? null);
@@ -260,7 +269,9 @@ export function PlatformProfileImportAssistant({
             </Field>
           </div>
           <p className="text-sm text-slate-600">
-            PDF, CSV, and text files are parsed locally. Screenshots are saved as user-provided evidence and may still need pasted text or manual review unless OCR is added later.
+            {persistentStorageAvailable
+              ? "PDF, CSV, and text files are parsed locally. Screenshots are saved as user-provided evidence and may still need pasted text or manual review unless OCR is added later."
+              : "File uploads are disabled in the hosted demo because persistent storage is not configured. Paste profile text or guided form answers instead."}
           </p>
           {draftImportMessage && (
             <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
@@ -272,7 +283,7 @@ export function PlatformProfileImportAssistant({
               {draftImportError}
             </div>
           )}
-          <Button type="submit" disabled={draftImportSaving || (!draftFile && !draftForm.raw_import_text.trim())}>
+          <Button type="submit" disabled={draftImportSaving || ((!persistentStorageAvailable || !draftFile) && !draftForm.raw_import_text.trim())}>
             {draftImportSaving ? "Creating Draft..." : "Create Draft Import"}
           </Button>
         </form>

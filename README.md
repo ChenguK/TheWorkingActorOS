@@ -26,7 +26,7 @@ cd ../backend
 
 GitHub Actions runs the same frontend unit, lint, build, and full Playwright checks, plus backend fast tests and guarded PostgreSQL contract smoke tests. Repository-wide Ruff lint and formatting have pre-existing debt and are not release gates yet; every Python file changed by a pull request must still pass `ruff check` and `ruff format --check`.
 
-Deploy only sanitized demo data with `ENVIRONMENT=portfolio_demo`, one explicit `CORS_ORIGINS` frontend origin, `SUPERVISED_BROWSER_ENABLED=false`, and external web search, AI, routing, scheduling, notifications, public-profile URL imports, and real submission automation disabled. Verify host upload persistence separately before enabling upload workflows. Green CI is required but does not replace post-deployment health, route, API, and persistence smoke testing.
+Deploy only sanitized demo data with `ENVIRONMENT=portfolio_demo`, one explicit `CORS_ORIGINS` frontend origin, `SUPERVISED_BROWSER_ENABLED=false`, and external web search, AI, routing, scheduling, notifications, public-profile URL imports, and real submission automation disabled. Persistent Materials uploads and deletion remain disabled by default. Enable them with `DURABLE_FILE_STORAGE_ENABLED=true` only after `UPLOAD_DIR` is backed by storage verified to survive instance restarts. Green CI is required but does not replace post-deployment health, route, API, and persistence smoke testing.
 
 Built as a portfolio-grade demonstration of multi-agent orchestration, explainable AI decision-making, human-in-the-loop learning, and approval-gated automation.
 
@@ -450,7 +450,7 @@ Automation:
 Storage:
 
 - PostgreSQL
-- Local file storage for actor assets
+- Configurable local file storage for actor assets; remote persistent mutations require explicitly verified durable storage
 
 ## Project Structure
 

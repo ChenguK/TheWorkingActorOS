@@ -137,6 +137,20 @@ class CapabilityService:
                 ),
             },
             {
+                "id": "persistent_file_storage",
+                "name": "Persistent File Storage",
+                "status": (
+                    "Configured" if flags["persistent_file_storage_available"] else "Not Configured"
+                ),
+                "configured": flags["persistent_file_storage_available"],
+                "what_it_enables": "Persistent Materials uploads and file deletion.",
+                "fallback_behavior": "Read-only Materials metadata and available demo files.",
+                "setup_instructions": (
+                    "Provide durable storage at UPLOAD_DIR, verify it survives instance "
+                    "restarts, then set DURABLE_FILE_STORAGE_ENABLED=true."
+                ),
+            },
+            {
                 "id": "source_discovery",
                 "name": "Source Discovery",
                 "status": "Configured"
@@ -178,6 +192,7 @@ class CapabilityService:
             "source_discovery_configured": self._source_discovery_configured(),
             "public_profile_import_configured": bool(settings.public_profile_import_enabled),
             "supervised_browser_available": settings.supervised_browser_available,
+            "persistent_file_storage_available": settings.persistent_file_storage_available,
             "portfolio_demo": settings.is_portfolio_demo,
         }
 
@@ -262,6 +277,18 @@ class CapabilityService:
                     else "Remote supervised-browser execution is disabled. Use manual entry or pasted breakdown text."
                 ),
                 "Manual Entry Required",
+            ),
+            "persistent_file_storage": self._state(
+                ("Configured" if flags["persistent_file_storage_available"] else "Not Configured"),
+                (
+                    "Persistent Materials uploads are available."
+                    if flags["persistent_file_storage_available"]
+                    else (
+                        "Materials metadata remains visible, but file upload and deletion "
+                        "are disabled until durable storage is configured."
+                    )
+                ),
+                "Read-Only Materials",
             ),
             "ai_assisted_tagging": self._state(
                 "Configured" if flags["ai_configured"] else "Not Configured",

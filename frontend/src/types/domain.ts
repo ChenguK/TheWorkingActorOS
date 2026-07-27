@@ -89,6 +89,7 @@ export type SystemCapabilities = {
     source_discovery_configured: boolean;
     public_profile_import_configured: boolean;
     supervised_browser_available: boolean;
+    persistent_file_storage_available: boolean;
     portfolio_demo: boolean;
   };
   states: Record<string, CapabilityState>;

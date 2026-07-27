@@ -53,7 +53,8 @@ def test_auditions_hooks_own_mutation_workflows():
 
     assert "useCreateSubmission" in submission_hook
     assert "createSelfTapeTask" in submission_hook
-    assert "createAuditionCalendarEvent" in submission_hook
+    assert "createAuditionCalendarEvent" not in submission_hook
+    assert "dates are added to your calendar automatically" in SUBMISSION_TRACKER.read_text()
     assert "createAuditionNote" in submission_hook
     assert "useCreateCallbackEvent" in callback_hook
     assert "useDeleteCallbackEvent" in callback_hook
