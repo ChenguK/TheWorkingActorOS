@@ -522,6 +522,65 @@ API docs:
 - `http://localhost:8000/docs`
 - `http://localhost:8000/health`
 
+## Render Backend Deployment
+
+The repository is a monorepo. The root-level `render.yaml` defines one Python web
+service with `backend` as its Render root directory. It uses:
+
+- Build: `python -m pip install -r requirements.txt`
+- Pre-deploy migration: `python -m alembic upgrade head`
+- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Health check: `/health`
+- Python: `3.12.13`
+
+Render pre-deploy commands require a paid web-service instance, so the Blueprint
+uses the `starter` plan. This keeps migrations in one pre-deploy process instead
+of running them concurrently from application workers.
+
+Required Render dashboard variables:
+
+- `DATABASE_URL` — externally supplied durable PostgreSQL connection string.
+  Never commit this value.
+- `CORS_ORIGINS` — the exact HTTPS Netlify production origin, with no path.
+  Never substitute `*`.
+- `ENVIRONMENT=portfolio_demo`
+- `DURABLE_FILE_STORAGE_ENABLED=false`
+- `TRAVEL_PROVIDER=manual`
+- `WEB_SEARCH_PROVIDER=none`
+- `SCHEDULER_ENABLED=false`
+- `NOTIFICATIONS_ENABLED=false`
+- `PUBLIC_PROFILE_IMPORT_ENABLED=false`
+- `SUPERVISED_BROWSER_ENABLED=false`
+
+The Blueprint also keeps `OPENAI_API_KEY`, `PARALLEL_API_KEY`,
+`GOOGLE_MAPS_API_KEY`, `MAPBOX_ACCESS_TOKEN`, and
+`OPENROUTESERVICE_API_KEY` empty. Credentials and private URLs belong only in
+the Render dashboard and must not be added for the sanitized portfolio demo.
+`APP_NAME`, `TRAVEL_CACHE_DAYS`, and `UPLOAD_DIR` otherwise use safe defaults;
+the Blueprint points `UPLOAD_DIR` at ephemeral `/tmp` storage while persistent
+uploads remain disabled.
+
+Netlify must set `VITE_API_URL` to the Render API origin including `/api/v1`.
+Because Vite embeds this variable at build time, changing it requires a new
+Netlify production build and deployment.
+
+Deployment checklist:
+
+1. Push `release/portfolio-readiness` and confirm all GitHub Actions checks pass.
+2. Create or select a durable PostgreSQL database; do not use a temporary or
+   expiring database.
+3. Obtain its connection string without adding it to source control.
+4. Create the Render Blueprint/web service from this repository and retain
+   `release/portfolio-readiness` for the first deployment.
+5. Supply `DATABASE_URL` and the exact Netlify origin as `CORS_ORIGINS` in the
+   Render dashboard; verify every sanitized default listed above.
+6. Confirm the pre-deploy log migrates PostgreSQL to the current Alembic head.
+7. Confirm the Render `/health` endpoint returns `{"status":"ok"}`.
+8. Set Netlify `VITE_API_URL` to the Render origin plus `/api/v1`, then trigger a
+   Netlify production deployment.
+9. Run the production health, capability, CORS, route, and workflow smoke suite.
+10. Keep `DURABLE_FILE_STORAGE_ENABLED=false`; do not test public uploads.
+
 ## Frontend Setup
 
 Requirements:
