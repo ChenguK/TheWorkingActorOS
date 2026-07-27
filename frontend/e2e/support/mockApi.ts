@@ -282,8 +282,6 @@ async function handle(request: Request, path: string, state: MockState): Promise
       const payload = await json() as Record<string, unknown>;
       const opportunity = state.opportunities.find((item) => item.id === payload.opportunity_id) ?? state.opportunities[0];
       state.submissions.push(submissionFixture(`submission-${state.submissions.length + 1}`, opportunity, payload));
-      if (payload.create_self_tape) state.workflowTapes.push(workflowTapeFixture(opportunity, payload));
-      if (payload.create_calendar) state.calendarEvents.push(calendarFixture(opportunity, payload));
     }
     return { body: method === "GET" ? state.submissions : state.submissions.at(-1) };
   }
