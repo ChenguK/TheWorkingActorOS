@@ -2,7 +2,15 @@ import unittest
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from app.db.models import ActorJournalEntry, Asset, AuditionCalendarEvent, CareerDevelopmentTask, CastingGoal, Opportunity, Submission
+from app.db.models import (
+    ActorJournalEntry,
+    Asset,
+    AuditionCalendarEvent,
+    CareerDevelopmentTask,
+    CastingGoal,
+    Opportunity,
+    Submission,
+)
 from app.db.models.agent import SelfTapeWorkflow
 from app.services.actor_work_event_service import ActorWorkEventService
 from app.services.opportunity_service import OpportunityService
@@ -36,7 +44,12 @@ class CrossModuleWorkflowTests(unittest.TestCase):
         candidates = self.service()._calendar_candidates(opportunity)
 
         self.assertIn(("Self-Tape Due", audition_deadline, None, False), candidates)
-        self.assertTrue(any(item[0] == "Virtual Callback" or item[0] == "In-Person Callback" for item in candidates))
+        self.assertTrue(
+            any(
+                item[0] == "Virtual Callback" or item[0] == "In-Person Callback"
+                for item in candidates
+            )
+        )
         self.assertTrue(any(item[0] == "Shoot" for item in candidates))
 
     def test_casting_goal_terms_feed_watch_lists(self):
@@ -196,7 +209,7 @@ class CrossModuleWorkflowTests(unittest.TestCase):
         self.assertEqual(calendar.start_datetime, due_at)
         self.assertEqual(calendar.notes, "https://casting.example/upload")
 
-    def test_submission_added_records_linked_journal_and_calendar(self):
+    def test_submission_added_records_linked_actor_work_journal_only(self):
         class FakeDb:
             def __init__(self):
                 self.added = []
@@ -228,11 +241,9 @@ class CrossModuleWorkflowTests(unittest.TestCase):
         ActorWorkEventService(db).submission_added(submission)
 
         journal = next(item for item in db.added if isinstance(item, ActorJournalEntry))
-        calendar = next(item for item in db.added if isinstance(item, AuditionCalendarEvent))
         self.assertEqual(journal.linked_breakdown_id, opportunity.id)
         self.assertEqual(journal.linked_audition_id, submission.id)
-        self.assertEqual(calendar.opportunity_id, opportunity.id)
-        self.assertEqual(calendar.submission_id, submission.id)
+        self.assertFalse(any(isinstance(item, AuditionCalendarEvent) for item in db.added))
 
     def test_material_upload_event_links_asset_and_task(self):
         class FakeDb:

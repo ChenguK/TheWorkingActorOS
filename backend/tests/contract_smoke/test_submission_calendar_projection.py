@@ -7,15 +7,13 @@ Observed frontend request graphs:
 * checked (the default): the same graph plus POST Calendar before POST audition
   journal.
 
-Submission creation itself always invokes both cross-module projectors. Their
-separate in-memory guards do not converge before commit, so overlapping
-type/date candidates create two submission-linked Calendar rows. The checked
-frontend Calendar POST bypasses both guards and creates a third row. Repeating
-either POST is not idempotent. Classification: DUPLICATE EVENT DEFECT and RETRY
-IDEMPOTENCY DEFECT. Production behavior is intentionally unchanged by these
-characterization tests. Strict Playwright records the checked and unchecked
-frontend requests, but its in-memory submission handler does not emulate these
-automatic PostgreSQL side effects; database row assertions live here.
+WorkflowConnectorService is the sole automatic submission Calendar projector;
+ActorWorkEventService still records the actor-work journal entry. The legacy
+checked frontend Calendar POST bypasses the connector guard and creates a second
+row until the frontend half of the correction removes that request. Repeating
+POST /submissions remains intentionally non-idempotent and is outside this fix.
+Strict Playwright records frontend requests, while PostgreSQL row assertions
+live here.
 """
 
 from __future__ import annotations
@@ -181,7 +179,7 @@ def wall_time(value: datetime) -> datetime:
     return value.replace(tzinfo=None)
 
 
-def test_unchecked_frontend_flow_still_gets_duplicate_backend_calendar_projection(client, db):
+def test_unchecked_frontend_flow_gets_one_backend_projection_per_semantic_milestone(client, db):
     from app.db.models import ActorJournalEntry
 
     actor = create_actor(client)
@@ -217,20 +215,8 @@ def test_unchecked_frontend_flow_still_gets_duplicate_backend_calendar_projectio
             UUID(submission["id"]),
         ),
         (
-            "Self-Tape Due",
-            "Self-tape due: Calendar Detective",
-            datetime.fromisoformat("2026-08-10T18:00:00"),
-            UUID(submission["id"]),
-        ),
-        (
             "In-Person Callback",
             "In-Person Callback: Calendar Detective · Ownership Contract",
-            datetime.fromisoformat("2026-08-12T14:00:00"),
-            UUID(submission["id"]),
-        ),
-        (
-            "In-Person Callback",
-            "Callback: Calendar Detective",
             datetime.fromisoformat("2026-08-12T14:00:00"),
             UUID(submission["id"]),
         ),
@@ -238,9 +224,10 @@ def test_unchecked_frontend_flow_still_gets_duplicate_backend_calendar_projectio
     assert all(row.opportunity_id == UUID(opportunity["id"]) for row in linked_calendar)
 
     # Opportunity creation projected its audition and callback dates without a
-    # submission link; submission creation added five linked rows.
+    # submission link; those rows intentionally coexist with three
+    # submission-linked connector projections.
     opportunity_calendar = calendar_rows(db, opportunity["id"])
-    assert len(opportunity_calendar) == 7
+    assert len(opportunity_calendar) == 5
     assert sum(row.submission_id is None for row in opportunity_calendar) == 2
 
     # The connector creates one audition journal row; the default frontend POST
@@ -265,7 +252,7 @@ def test_unchecked_frontend_flow_still_gets_duplicate_backend_calendar_projectio
     ]
 
 
-def test_checked_frontend_flow_adds_a_duplicate_submission_calendar_event(client, db):
+def test_legacy_checked_frontend_flow_adds_one_row_beyond_backend_projection(client, db):
     actor = create_actor(client)
     opportunity = create_opportunity(
         client,
@@ -280,7 +267,7 @@ def test_checked_frontend_flow_adds_a_duplicate_submission_calendar_event(client
     )
 
     linked_calendar = calendar_rows(db, opportunity["id"], submission["id"])
-    assert len(linked_calendar) == 3
+    assert len(linked_calendar) == 2
     assert {
         (
             row.event_type,
@@ -299,11 +286,10 @@ def test_checked_frontend_flow_adds_a_duplicate_submission_calendar_event(client
     }
     assert {row.title for row in linked_calendar} == {
         "Self-Tape Due: Calendar Detective · Ownership Contract",
-        "Self-tape due: Calendar Detective",
         "Calendar Detective · Ownership Contract",
     }
-    assert {row.location for row in linked_calendar} == {None, "Remote"}
-    assert {row.is_virtual for row in linked_calendar} == {False, True}
+    assert {row.location for row in linked_calendar} == {"Remote"}
+    assert {row.is_virtual for row in linked_calendar} == {False}
 
     # No database uniqueness or OperationsService guard prevents the direct POST.
     assert len(journal_rows(db, submission["id"])) == 2
@@ -325,8 +311,8 @@ def test_retried_submission_and_direct_calendar_posts_are_not_idempotent(client,
         db.scalars(select(Submission).where(Submission.opportunity_id == opportunity["id"]))
     )
     assert {row.id for row in submissions} == {UUID(first["id"]), UUID(second["id"])}
-    assert len(calendar_rows(db, opportunity["id"], first["id"])) == 2
-    assert len(calendar_rows(db, opportunity["id"], second["id"])) == 2
+    assert len(calendar_rows(db, opportunity["id"], first["id"])) == 1
+    assert len(calendar_rows(db, opportunity["id"], second["id"])) == 1
     assert len(journal_rows(db, first["id"])) == 1
     assert len(journal_rows(db, second["id"])) == 1
     assert (
@@ -358,9 +344,9 @@ def test_retried_submission_and_direct_calendar_posts_are_not_idempotent(client,
         assert response.status_code == 201, response.text
 
     first_calendar = calendar_rows(db, opportunity["id"], first["id"])
-    assert len(first_calendar) == 4
+    assert len(first_calendar) == 3
     assert sum(row.title == payload["title"] for row in first_calendar) == 2
-    assert len({row.id for row in first_calendar}) == 4
+    assert len({row.id for row in first_calendar}) == 3
 
 
 @pytest.mark.parametrize(
@@ -373,13 +359,11 @@ def test_retried_submission_and_direct_calendar_posts_are_not_idempotent(client,
             },
             [
                 ("In-Person Callback", datetime.fromisoformat("2026-08-11T15:00:00")),
-                ("In-Person Callback", datetime.fromisoformat("2026-08-11T15:00:00")),
             ],
         ),
         (
             {"audition_deadline": "2026-08-10T18:00:00"},
             [
-                ("Self-Tape Due", datetime.fromisoformat("2026-08-10T18:00:00")),
                 ("Self-Tape Due", datetime.fromisoformat("2026-08-10T18:00:00")),
             ],
         ),
