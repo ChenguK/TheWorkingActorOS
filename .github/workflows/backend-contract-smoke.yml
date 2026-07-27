@@ -1,4 +1,4 @@
-name: Backend Contract Smoke
+name: Backend Verification
 
 on:
   push:
@@ -8,7 +8,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  fast-tests:
+    name: Unit and fast tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      CORS_ORIGINS: http://localhost:5173
+      WEB_SEARCH_PROVIDER: none
+      TRAVEL_PROVIDER: manual
+      SCHEDULER_ENABLED: "false"
+      NOTIFICATIONS_ENABLED: "false"
+      PUBLIC_PROFILE_IMPORT_ENABLED: "false"
+      SUPERVISED_BROWSER_ENABLED: "false"
+      OPENAI_API_KEY: ""
+      PARALLEL_API_KEY: ""
+      OPENROUTESERVICE_API_KEY: ""
+      GOOGLE_MAPS_API_KEY: ""
+      MAPBOX_ACCESS_TOKEN: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest
+
   contract-smoke:
+    name: PostgreSQL contract smoke
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -37,6 +67,7 @@ jobs:
       SCHEDULER_ENABLED: "false"
       NOTIFICATIONS_ENABLED: "false"
       PUBLIC_PROFILE_IMPORT_ENABLED: "false"
+      SUPERVISED_BROWSER_ENABLED: "false"
       OPENAI_API_KEY: ""
       PARALLEL_API_KEY: ""
       OPENROUTESERVICE_API_KEY: ""

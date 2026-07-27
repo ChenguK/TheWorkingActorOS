@@ -6,6 +6,28 @@ Your AI-powered career operating system.
 
 The Working Actor OS helps actors manage breakdowns, auditions, materials, relationships, analytics, and career strategy in one AI-powered workspace.
 
+## Portfolio release verification
+
+Use Node `20.20.2` with npm 10+ and Python 3.12. Before a portfolio deployment, run:
+
+```bash
+cd frontend
+nvm use
+npm ci
+npm test
+npm run lint
+npm run build
+npm run test:e2e
+
+cd ../backend
+.venv/bin/python -m pytest
+.venv/bin/python scripts/run_contract_smoke.py
+```
+
+GitHub Actions runs the same frontend unit, lint, build, and full Playwright checks, plus backend fast tests and guarded PostgreSQL contract smoke tests. Repository-wide Ruff lint and formatting have pre-existing debt and are not release gates yet; every Python file changed by a pull request must still pass `ruff check` and `ruff format --check`.
+
+Deploy only sanitized demo data with `ENVIRONMENT=portfolio_demo`, one explicit `CORS_ORIGINS` frontend origin, `SUPERVISED_BROWSER_ENABLED=false`, and external web search, AI, routing, scheduling, notifications, public-profile URL imports, and real submission automation disabled. Verify host upload persistence separately before enabling upload workflows. Green CI is required but does not replace post-deployment health, route, API, and persistence smoke testing.
+
 Built as a portfolio-grade demonstration of multi-agent orchestration, explainable AI decision-making, human-in-the-loop learning, and approval-gated automation.
 
 ## What It Does
