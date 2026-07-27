@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { createAuditionCalendarEvent, createAuditionNote, createSelfTapeTask, updateSelfTapeTask } from "../api";
+import { createAuditionNote, createSelfTapeTask, updateSelfTapeTask } from "../api";
 import { useQueryClient } from "@tanstack/react-query";
 import { calendarEventListKey } from "../../calendar";
 import { auditionKeys, useCreateSubmission, useDeleteSubmission, useUpdateSubmissionStatus, useUpdateWorkflowSelfTape } from "./useAuditionQueries";
@@ -19,7 +19,6 @@ const initialForm: SubmissionFormState = {
   self_tape_submission_link: "",
   preparation_instructions: "",
   submission_instructions: "",
-  create_calendar: true,
   create_journal: true,
   create_self_tape: true,
   submission_fee: "",
@@ -133,7 +132,6 @@ export function useSubmissionTracker({
   }
 
   async function createAuditionLinkedRecords(current: SubmissionFormState, submission: Submission, opportunity?: Opportunity) {
-    const title = opportunity ? `${opportunity.role} · ${opportunity.project}` : "Audition";
     if (current.create_self_tape && current.tape_due_at && opportunity) {
       const existingTape = selfTapes.find((workflow) => workflow.opportunity_id === opportunity.id && !workflow.submission_id);
       const payload = {
@@ -147,21 +145,6 @@ export function useSubmissionTracker({
       };
       if (existingTape) await updateSelfTapeTask(existingTape.id, payload);
       else await createSelfTapeTask(payload);
-    }
-    if (current.create_calendar) {
-      const dateValue = current.tape_due_at || current.audition_date;
-      if (dateValue) {
-        await createAuditionCalendarEvent({
-          title,
-          event_type: current.tape_due_at ? "Self-Tape Due" : current.virtual_audition_link ? "Virtual Callback" : "In-Person Callback",
-          opportunity_id: opportunity?.id ?? null,
-          submission_id: submission.id,
-          start_datetime: dateValue,
-          location: current.audition_location || null,
-          is_virtual: Boolean(current.virtual_audition_link),
-          notes: current.preparation_instructions || current.submission_instructions || null
-        });
-      }
     }
     if (current.create_journal) {
       await createAuditionNote({

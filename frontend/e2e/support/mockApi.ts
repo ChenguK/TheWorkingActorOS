@@ -15,6 +15,7 @@ export type MockState = {
   calendarEvents: Array<Record<string, unknown>>;
   actorJournal: Array<Record<string, unknown>>;
   assets: Array<Record<string, unknown>>;
+  capabilities: Record<string, unknown>;
   focusMode: string;
   failPath?: string;
   delayPath?: string;
@@ -35,6 +36,7 @@ export function createMockState(overrides: Partial<MockState> = {}): MockState {
     calendarEvents: [],
     actorJournal: [],
     assets: [assetFixture()],
+    capabilities: capabilitiesFixture(),
     focusMode: "Audition Mode",
     ...overrides
   };
@@ -46,6 +48,7 @@ export async function installMockApi(page: Page, state = createMockState()) {
     const url = new URL(request.url());
     const path = `${url.pathname.replace("/api/v1", "")}${url.search}`;
     state.requests.push(`${request.method()} ${path}`);
+    assertHandledApiRequest(request.method(), url);
     if (state.delayPath && url.pathname.endsWith(state.delayPath)) {
       await new Promise((resolve) => setTimeout(resolve, state.delayMs ?? 250));
     }
@@ -59,12 +62,101 @@ export async function installMockApi(page: Page, state = createMockState()) {
   return state;
 }
 
+const exactRoutes = new Set([
+  "GET /system/capabilities",
+  "GET /actor-profile",
+  "PUT /actor-profile",
+  "GET /representation",
+  "POST /representation",
+  "GET /representation/acting-credits/list",
+  "GET /opportunities",
+  "POST /opportunities",
+  "GET /automation/opportunities/hidden",
+  "GET /automation/source-research",
+  "GET /automation/discovery/plugins",
+  "GET /automation/discovery/providers",
+  "GET /automation/submission-queue",
+  "GET /agents/recommendations",
+  "GET /agents/chief-of-staff/briefs",
+  "GET /agents/career/swot",
+  "GET /agents/casting-goals",
+  "GET /agents/watch-lists",
+  "GET /agents/career-memory",
+  "GET /submissions",
+  "POST /submissions",
+  "GET /command-center",
+  "GET /command-center/self-tapes",
+  "POST /command-center/self-tapes",
+  "GET /intelligence/self-tapes",
+  "POST /intelligence/self-tapes",
+  "GET /intelligence/self-tapes/analytics",
+  "GET /intelligence/audition-journal",
+  "POST /intelligence/audition-journal",
+  "GET /intelligence/callback-events",
+  "GET /intelligence/readiness/opportunities",
+  "GET /intelligence/dashboard",
+  "GET /intelligence/casting-patterns",
+  "GET /intelligence/materials/performance",
+  "GET /intelligence/relationships",
+  "GET /intelligence/relationships/analytics",
+  "GET /intelligence/scripts/sources",
+  "GET /intelligence/casting-offices",
+  "GET /intelligence/career/quarterly-reviews",
+  "GET /intelligence/dream-targets/readiness",
+  "GET /operations/calendar/events",
+  "POST /operations/calendar/events",
+  "GET /operations/availability",
+  "GET /operations/platform-subscriptions",
+  "GET /operations/equipment-profile",
+  "GET /operations/dashboard",
+  "GET /journal",
+  "GET /assets",
+  "POST /assets",
+  "GET /dashboard/focus-mode",
+  "PUT /dashboard/focus-mode",
+  "GET /dashboard/widgets",
+  "GET /career-development/tasks",
+  "GET /platform-imports/profiles",
+  "GET /platform-imports/public-profiles",
+  "GET /platform-imports/asset-mappings"
+]);
+
+const dynamicRoutes = [
+  /^POST \/agents\/recommendations\/[^/]+\/feedback$/,
+  /^POST \/opportunities\/[^/]+\/recommend$/,
+  /^POST \/opportunities\/[^/]+\/reject$/,
+  /^DELETE \/opportunities\/[^/]+$/,
+  /^PATCH \/opportunities\/[^/]+$/,
+  /^POST \/opportunities\/[^/]+\/parse-breakdown-text$/,
+  /^POST \/opportunities\/[^/]+\/deep-parse$/,
+  /^POST \/submissions\/[^/]+\/status-history$/,
+  /^PATCH \/operations\/calendar\/events\/[^/]+$/,
+  /^PATCH \/assets\/[^/]+$/,
+  /^GET \/travel-preferences\/[^/]+$/
+];
+
+export function assertHandledApiRequest(method: string, url: URL) {
+  const path = url.pathname.replace("/api/v1", "");
+  const methodPath = `${method} ${path}`;
+  const queryIsExpected = methodPath === "GET /opportunities/material-matches"
+    && url.search === "?include_hidden=false&min_score=15";
+  const hasUnexpectedQuery = url.search !== "" && !queryIsExpected;
+  const handled = !hasUnexpectedQuery && (
+    exactRoutes.has(methodPath)
+    || dynamicRoutes.some((pattern) => pattern.test(methodPath))
+    || queryIsExpected
+  );
+  if (!handled) {
+    throw new Error(`Unhandled mock API request: ${method} ${path}${url.search}`);
+  }
+}
+
 async function handle(request: Request, path: string, state: MockState): Promise<{ body?: unknown; status?: number }> {
   const method = request.method();
   const json = async () => {
     try { return request.postDataJSON(); } catch { return {}; }
   };
-  if (path === "/system/capabilities") return { body: capabilitiesFixture() };
+  if (path === "/system/capabilities" && method === "GET") return { body: state.capabilities };
   if (path === "/actor-profile") {
     if (method === "PUT") state.actor = { ...state.actor, ...(await json()) };
     return { body: state.actor };
@@ -84,8 +176,8 @@ async function handle(request: Request, path: string, state: MockState): Promise
     }
     return { body: method === "GET" ? state.opportunities : state.opportunities.at(-1), status: method === "POST" ? 201 : 200 };
   }
-  if (path === "/automation/opportunities/hidden") return { body: state.hiddenOpportunities };
-  if (path === "/agents/recommendations") return { body: state.recommendations };
+  if (path === "/automation/opportunities/hidden" && method === "GET") return { body: state.hiddenOpportunities };
+  if (path === "/agents/recommendations" && method === "GET") return { body: state.recommendations };
   if (path.startsWith("/agents/recommendations/") && path.endsWith("/feedback") && method === "POST") {
     const recommendationId = path.split("/")[3];
     const payload = await json() as Record<string, unknown>;
@@ -192,8 +284,6 @@ async function handle(request: Request, path: string, state: MockState): Promise
       const payload = await json() as Record<string, unknown>;
       const opportunity = state.opportunities.find((item) => item.id === payload.opportunity_id) ?? state.opportunities[0];
       state.submissions.push(submissionFixture(`submission-${state.submissions.length + 1}`, opportunity, payload));
-      if (payload.create_self_tape) state.workflowTapes.push(workflowTapeFixture(opportunity, payload));
-      if (payload.create_calendar) state.calendarEvents.push(calendarFixture(opportunity, payload));
     }
     return { body: method === "GET" ? state.submissions : state.submissions.at(-1) };
   }
@@ -223,12 +313,13 @@ async function handle(request: Request, path: string, state: MockState): Promise
     if (method === "POST") state.reusableTapes.push({ id: `reusable-${state.reusableTapes.length + 1}`, ...(await json()), created_at: now, updated_at: now });
     return { body: method === "GET" ? state.reusableTapes : state.reusableTapes.at(-1) };
   }
-  if (path === "/intelligence/self-tapes/analytics") return { body: { by_archetype: [], by_outcome: [], best_performing_tapes: [], underused_tapes: [] } };
+  if (path === "/intelligence/self-tapes/analytics" && method === "GET") return { body: { by_archetype: [], by_outcome: [], best_performing_tapes: [], underused_tapes: [] } };
   if (path === "/operations/calendar/events") {
     if (method === "POST") state.calendarEvents.push({ id: `calendar-${state.calendarEvents.length + 1}`, ...(await json()), created_at: now, updated_at: now });
     return { body: method === "GET" ? state.calendarEvents : state.calendarEvents.at(-1) };
   }
-  if (path === "/journal") return { body: state.actorJournal };
+  if (path === "/journal" && method === "GET") return { body: state.actorJournal };
+  if (path === "/intelligence/audition-journal" && method === "GET") return { body: [] };
   if (path === "/intelligence/audition-journal" && method === "POST") return { body: { id: "note-1", ...(await json()), created_at: now, updated_at: now } };
   if (path.startsWith("/operations/calendar/events/") && method === "PATCH") {
     const event = state.calendarEvents.find((item) => item.id === path.split("/").at(-1)); Object.assign(event ?? {}, await json()); return { body: event };
@@ -244,15 +335,40 @@ async function handle(request: Request, path: string, state: MockState): Promise
     if (method === "PUT") state.focusMode = String((await json() as Record<string, unknown>).active_mode);
     return { body: { id: "focus-1", active_mode: state.focusMode, created_at: now, updated_at: now } };
   }
-  if (path === "/dashboard/widgets") return { body: dashboardWidgets() };
-  return { body: defaultResponse(path) };
-}
-
-function defaultResponse(path: string): unknown {
-  if (path === "/command-center") return { today_opportunities: [], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] };
-  if (path.includes("/dashboard") || path.includes("/analytics")) return null;
-  if (path === "/operations/equipment-profile" || path.startsWith("/travel-preferences/")) return null;
-  return [];
+  if (path === "/dashboard/widgets" && method === "GET") return { body: dashboardWidgets() };
+  if (path === "/command-center" && method === "GET") return { body: { today_opportunities: [], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] } };
+  if (path === "/operations/equipment-profile" && method === "GET") return { body: null };
+  if (/^\/travel-preferences\/[^/]+$/.test(path) && method === "GET") return { body: null };
+  if (path === "/operations/dashboard" && method === "GET") return { body: null };
+  if (path === "/intelligence/dashboard" && method === "GET") return { body: null };
+  if (path === "/intelligence/relationships/analytics" && method === "GET") return { body: null };
+  if (path === "/intelligence/casting-patterns" && method === "GET") return { body: null };
+  if (path === "/intelligence/materials/performance" && method === "GET") return { body: null };
+  if (path === "/opportunities/material-matches" && method === "GET") return { body: [] };
+  if (path === "/automation/source-research" && method === "GET") return { body: [] };
+  if (path === "/automation/discovery/plugins" && method === "GET") return { body: [] };
+  if (path === "/automation/discovery/providers" && method === "GET") return { body: [] };
+  if (path === "/automation/submission-queue" && method === "GET") return { body: [] };
+  if (path === "/intelligence/readiness/opportunities" && method === "GET") return { body: [] };
+  if (path === "/operations/availability" && method === "GET") return { body: [] };
+  if (path === "/intelligence/callback-events" && method === "GET") return { body: [] };
+  if (path === "/career-development/tasks" && method === "GET") return { body: [] };
+  if (path === "/representation/acting-credits/list" && method === "GET") return { body: [] };
+  if (path === "/operations/platform-subscriptions" && method === "GET") return { body: [] };
+  if (path === "/platform-imports/profiles" && method === "GET") return { body: [] };
+  if (path === "/platform-imports/public-profiles" && method === "GET") return { body: [] };
+  if (path === "/platform-imports/asset-mappings" && method === "GET") return { body: [] };
+  if (path === "/intelligence/relationships" && method === "GET") return { body: [] };
+  if (path === "/agents/career/swot" && method === "GET") return { body: null };
+  if (path === "/intelligence/career/quarterly-reviews" && method === "GET") return { body: [] };
+  if (path === "/agents/casting-goals" && method === "GET") return { body: [] };
+  if (path === "/intelligence/scripts/sources" && method === "GET") return { body: [] };
+  if (path === "/agents/chief-of-staff/briefs" && method === "GET") return { body: [] };
+  if (path === "/intelligence/casting-offices" && method === "GET") return { body: [] };
+  if (path === "/intelligence/dream-targets/readiness" && method === "GET") return { body: [] };
+  if (path === "/agents/watch-lists" && method === "GET") return { body: [] };
+  if (path === "/agents/career-memory" && method === "GET") return { body: [] };
+  throw new Error(`Mock route was recognized but has no response: ${method} ${path}`);
 }
 
 export const opportunityFixture = (id = "opp-1") => ({ id, role: "DST Detective", project: "Spring Forward", description: "Lead investigator", source_type: "Manual Entry", source_status: "Approved", visibility_status: "Visible", platform: "E2E", project_type: "TV", role_type: "Guest Star", category: "Film/TV", union: "SAG-AFTRA", location: "New York, NY", shoot_location: "New York, NY", audition_type: "Self-Tape", audition_deadline: "2026-03-08T01:30:00-05:00", submission_deadline: "2026-03-08T01:30:00-05:00", priority: "High", archetypes: ["Authority"], role_details: {}, source_metadata: {}, production_details: {}, extracted_facts: {}, ai_inference: {}, breakdown_roles: [], breakdown_sections: [], breakdown_parse_runs: [], watchlist_match_names: [], watchlist_match_count: 0, manual_review_required: false, is_duplicate: false, from_agent: false, travel_covered: false, housing_covered: false, created_at: now, updated_at: now });
@@ -263,5 +379,5 @@ const actorFixture = () => ({ id: "actor-1", name: "Avery Stone", sag_status: "S
 const submissionFixture = (id: string, opportunity: Record<string, unknown>, payload: Record<string, unknown>) => ({ id, opportunity_id: opportunity.id, actor_profile_id: "actor-1", opportunity, current_status: payload.current_status ?? "Submitted", assets: [], status_history: [], total_cost: 0, submission_fee: 0, media_fee: 0, travel_cost: 0, housing_cost: 0, parking_cost: 0, other_cost: 0, tape_due_at: payload.tape_due_at ?? null, audition_date: payload.audition_date ?? null, created_at: now, updated_at: now });
 const workflowTapeFixture = (opportunity: Record<string, unknown>, payload: Record<string, unknown>) => ({ id: `workflow-${Date.now()}`, opportunity_id: opportunity.id, submission_id: null, title: `${opportunity.role} Self-Tape`, project: opportunity.project, role: opportunity.role, tape_due_at: payload.tape_due_at, status: "Not Started", created_at: now, updated_at: now });
 const calendarFixture = (opportunity: Record<string, unknown>, payload: Record<string, unknown>) => ({ id: `calendar-${Date.now()}`, title: `${opportunity.role} Audition`, event_type: "Self-Tape Due", start_datetime: payload.tape_due_at, end_datetime: null, opportunity_id: opportunity.id, submission_id: null, is_virtual: true, created_at: now, updated_at: now });
-const capabilitiesFixture = () => ({ flags: { ai_configured: false }, states: { industry_trend_analysis: { state: "available" }, career_agent_recommendations: { state: "available" }, archetype_performance: { state: "available" } }, integrations: [], labels: {} });
+const capabilitiesFixture = () => ({ flags: { ai_configured: false, supervised_browser_available: false, persistent_file_storage_available: false, portfolio_demo: true }, states: { industry_trend_analysis: { state: "available" }, career_agent_recommendations: { state: "available" }, archetype_performance: { state: "available" } }, integrations: [], labels: {} });
 const dashboardWidgets = () => [{ id: "widget-1", widget_id: "quick_actions", display_name: "Quick Actions", enabled: true, sort_order: 0, size: "medium", created_at: now, updated_at: now }];

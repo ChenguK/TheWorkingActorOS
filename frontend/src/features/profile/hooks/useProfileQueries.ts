@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidationContracts, keysForContract } from "../../../services/api/invalidationContracts";
 import { queryKeys } from "../../../services/api/queryKeys";
 import { queryStaleTimes } from "../../../services/api/queryPolicy";
 import type { ActingCredit, CastingPlatformSubscription, PlatformAssetMapping, Representation } from "../../../types/domain";
@@ -32,7 +33,7 @@ export const usePlatformSubscriptions = () => useQuery({ queryKey: profileKeys.s
 export const useEquipmentProfile = () => useQuery({ queryKey: profileKeys.equipment, queryFn: getProfessionalEquipmentProfile, ...queryOptions });
 
 function useInvalidate(...keys: readonly (readonly unknown[])[]) { const client = useQueryClient(); return () => Promise.all(keys.map((queryKey) => client.invalidateQueries({ queryKey }))); }
-export function useUpdateActorProfile() { const invalidate = useInvalidate(profileKeys.actor); return useMutation({ mutationFn: updateActorProfile, onSuccess: invalidate }); }
+export function useUpdateActorProfile() { const invalidate = useInvalidate(...keysForContract(invalidationContracts.actorProfileUpdate)); return useMutation({ mutationFn: updateActorProfile, onSuccess: invalidate }); }
 export function useSaveTravelPreferences(actorId?: string) { const invalidate = useInvalidate(profileKeys.travel(actorId)); return useMutation({ mutationFn: saveTravelPreferences, onSuccess: invalidate }); }
 export function useCreateRepresentation() { const invalidate = useInvalidate(profileKeys.representations); return useMutation({ mutationFn: createRepresentation, onSuccess: invalidate }); }
 export function useUpdateRepresentation() { const invalidate = useInvalidate(profileKeys.representations); return useMutation({ mutationFn: ({ id, patch }: { id: string; patch: Partial<Representation> }) => updateRepresentation(id, patch), onSuccess: invalidate }); }
@@ -43,8 +44,15 @@ export function useDeleteActingCredit() { const invalidate = useInvalidate(profi
 function useInvalidateImports() { return useInvalidate(profileKeys.platformProfiles, profileKeys.publicImports, profileKeys.mappings, profileKeys.credits); }
 export function useImportPublicProfile() { const invalidate = useInvalidateImports(); return useMutation({ mutationFn: importPublicProfileUrl, onSuccess: invalidate }); }
 export function useImportProfileUpload() { const invalidate = useInvalidateImports(); return useMutation({ mutationFn: importProfileUpload, onSuccess: invalidate }); }
-export function usePublicImportAction() { const invalidate = useInvalidateImports(); return useMutation({ mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" | "delete" }) => action === "approve" ? approvePublicProfileImport(id) : action === "reject" ? rejectPublicProfileImport(id) : deletePublicProfileImport(id), onSuccess: invalidate }); }
-export function usePlatformImportAction() { const invalidate = useInvalidateImports(); return useMutation({ mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" | "delete" }) => action === "approve" ? approvePlatformProfileImport(id) : action === "reject" ? rejectPlatformProfileImport(id) : deletePlatformProfileImport(id), onSuccess: invalidate }); }
+export function usePublicImportAction() { const invalidate = useInvalidate(profileKeys.publicImports, profileKeys.mappings); return useMutation({ mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" | "delete" }) => action === "approve" ? approvePublicProfileImport(id) : action === "reject" ? rejectPublicProfileImport(id) : deletePublicProfileImport(id), onSuccess: invalidate }); }
+export function usePlatformImportAction() {
+  const invalidateApproval = useInvalidate(...keysForContract(invalidationContracts.actorLinkedPlatformProfileApprove));
+  const invalidateOtherAction = useInvalidateImports();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "approve" | "reject" | "delete" }) => action === "approve" ? approvePlatformProfileImport(id) : action === "reject" ? rejectPlatformProfileImport(id) : deletePlatformProfileImport(id),
+    onSuccess: (_data, { action }) => action === "approve" ? invalidateApproval() : invalidateOtherAction()
+  });
+}
 export function useCreatePlatformMapping() { const invalidate = useInvalidate(profileKeys.mappings); return useMutation({ mutationFn: createPlatformAssetMapping, onSuccess: invalidate }); }
 export function useUpdatePlatformMapping() { const invalidate = useInvalidate(profileKeys.mappings); return useMutation({ mutationFn: ({ id, patch }: { id: string; patch: Partial<PlatformAssetMapping> }) => updatePlatformAssetMapping(id, patch), onSuccess: invalidate }); }
 export function useDeletePlatformMapping() { const invalidate = useInvalidate(profileKeys.mappings); return useMutation({ mutationFn: deletePlatformAssetMapping, onSuccess: invalidate }); }

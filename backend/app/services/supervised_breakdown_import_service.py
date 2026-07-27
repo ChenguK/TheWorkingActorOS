@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.automation.discovery.classification import classify_breakdown_text
+from app.core.config import get_settings
 from app.core.errors import NotFoundError
 from app.db.models import ActorProfile, Opportunity, SupervisedBreakdownImport
 from app.schemas.opportunity import OpportunityCreate
@@ -33,6 +34,24 @@ BLOCKED_HINTS = {
 }
 
 
+class SupervisedBrowserDisabledError(RuntimeError):
+    pass
+
+
+def supervised_browser_unavailable_message() -> str:
+    settings = get_settings()
+    if settings.is_portfolio_demo:
+        reason = "disabled in the sanitized portfolio demo"
+    elif settings.is_local_environment:
+        reason = "disabled by SUPERVISED_BROWSER_ENABLED"
+    else:
+        reason = "available only in local development"
+    return (
+        f"Supervised browser automation is {reason}. "
+        "Use manual breakdown entry or paste the breakdown text instead."
+    )
+
+
 class SupervisedBrowserController:
     def __init__(self) -> None:
         self._playwright = None
@@ -54,11 +73,16 @@ class SupervisedBrowserController:
         self._browser = self._playwright.chromium.launch(headless=False)
         self._page = self._browser.new_page()
         self.platform_name = platform_name
-        self._page.goto(PLATFORM_START_URLS[platform_name], wait_until="domcontentloaded", timeout=30000)
-        return self.status("Supervised browser opened. Log in manually, navigate to one breakdown, then click Import This Breakdown.")
+        self._page.goto(
+            PLATFORM_START_URLS[platform_name], wait_until="domcontentloaded", timeout=30000
+        )
+        return self.status(
+            "Supervised browser opened. Log in manually, navigate to one breakdown, then click Import This Breakdown."
+        )
 
     def status(self, message: str = "Supervised browser status.") -> dict:
         return {
+            "available": True,
             "active": self._page is not None,
             "platform_name": self.platform_name,
             "current_url": self.current_url(),
@@ -115,21 +139,29 @@ class SupervisedBreakdownImportService:
     def list_imports(self) -> list[SupervisedBreakdownImport]:
         return list(
             self.db.scalars(
-                select(SupervisedBreakdownImport).order_by(SupervisedBreakdownImport.imported_at.desc())
+                select(SupervisedBreakdownImport).order_by(
+                    SupervisedBreakdownImport.imported_at.desc()
+                )
             )
         )
 
     def start_browser(self, platform_name: str) -> dict:
+        self._ensure_browser_available()
         return supervised_browser.start(platform_name)
 
     def browser_status(self) -> dict:
+        if not get_settings().supervised_browser_available:
+            return self._disabled_browser_status()
         return supervised_browser.status()
 
     def close_browser(self) -> dict:
+        if not get_settings().supervised_browser_available:
+            return self._disabled_browser_status()
         supervised_browser.close()
         return supervised_browser.status("Supervised browser closed.")
 
     def import_current_page(self) -> SupervisedBreakdownImport:
+        self._ensure_browser_available()
         captured = supervised_browser.capture_visible_page()
         actor = self.db.scalars(select(ActorProfile).limit(1)).first()
         raw_text = captured["raw_visible_text"]
@@ -143,7 +175,9 @@ class SupervisedBreakdownImportService:
             status = "Blocked"
             error_message = "This platform blocked automated extraction. Use copy/paste, screenshot, PDF, or manual entry instead."
         else:
-            parsed = self._parse_breakdown(raw_text, captured["source_url"], captured["platform_name"])
+            parsed = self._parse_breakdown(
+                raw_text, captured["source_url"], captured["platform_name"]
+            )
             status = "Draft" if parsed.get("confidence") != "Low" else "Needs Review"
 
         record = SupervisedBreakdownImport(
@@ -162,6 +196,19 @@ class SupervisedBreakdownImportService:
         self.db.refresh(record)
         return record
 
+    def _ensure_browser_available(self) -> None:
+        if not get_settings().supervised_browser_available:
+            raise SupervisedBrowserDisabledError(supervised_browser_unavailable_message())
+
+    def _disabled_browser_status(self) -> dict:
+        return {
+            "available": False,
+            "active": False,
+            "platform_name": None,
+            "current_url": None,
+            "message": supervised_browser_unavailable_message(),
+        }
+
     def update_import(
         self, import_id: UUID, payload: SupervisedBreakdownImportUpdate
     ) -> SupervisedBreakdownImport:
@@ -176,7 +223,9 @@ class SupervisedBreakdownImportService:
     def approve_import(self, import_id: UUID) -> tuple[SupervisedBreakdownImport, Opportunity]:
         record = self._get(import_id)
         if record.import_status == "Blocked":
-            raise ValueError("Blocked imports cannot be approved. Use copy/paste, screenshot, PDF, or manual entry instead.")
+            raise ValueError(
+                "Blocked imports cannot be approved. Use copy/paste, screenshot, PDF, or manual entry instead."
+            )
         if record.import_status == "Rejected":
             raise ValueError("Rejected imports cannot be approved.")
         parsed = record.parsed_data_json or {}
@@ -215,11 +264,44 @@ class SupervisedBreakdownImportService:
     def _parse_breakdown(self, text: str, source_url: str | None, platform_name: str) -> dict:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         joined = "\n".join(lines)
-        project = self._field(lines, ["project", "title", "production"]) or self._guess_project(lines)
+        project = self._field(lines, ["project", "title", "production"]) or self._guess_project(
+            lines
+        )
         role = self._field(lines, ["role", "character"]) or self._guess_role(lines)
-        role_type = self._find_known(joined, ["Guest Star", "Co-Star", "Recurring", "Series Regular", "Lead", "Supporting", "Principal", "Featured"])
-        project_type = self._find_known(joined, ["Television", "TV", "Film", "Feature", "Short", "Commercial", "Theater", "Theatre", "New Media", "Voiceover"])
-        union = self._find_known(joined, ["SAG-AFTRA", "SAG", "AFTRA", "Equity", "AEA", "Non-Union", "Union"]) or "Unknown"
+        role_type = self._find_known(
+            joined,
+            [
+                "Guest Star",
+                "Co-Star",
+                "Recurring",
+                "Series Regular",
+                "Lead",
+                "Supporting",
+                "Principal",
+                "Featured",
+            ],
+        )
+        project_type = self._find_known(
+            joined,
+            [
+                "Television",
+                "TV",
+                "Film",
+                "Feature",
+                "Short",
+                "Commercial",
+                "Theater",
+                "Theatre",
+                "New Media",
+                "Voiceover",
+            ],
+        )
+        union = (
+            self._find_known(
+                joined, ["SAG-AFTRA", "SAG", "AFTRA", "Equity", "AEA", "Non-Union", "Union"]
+            )
+            or "Unknown"
+        )
         audition_type = self._audition_type(joined)
         return {
             "platform": platform_name,
@@ -230,13 +312,17 @@ class SupervisedBreakdownImportService:
             "project_type": project_type,
             "casting_office": self._field(lines, ["casting", "casting office", "casting director"]),
             "audition_type": audition_type,
-            "self_tape_due_date": self._field(lines, ["self tape due", "self-tape due", "due date", "deadline"]),
+            "self_tape_due_date": self._field(
+                lines, ["self tape due", "self-tape due", "due date", "deadline"]
+            ),
             "audition_location": self._field(lines, ["audition location", "audition"]),
             "shoot_location": self._field(lines, ["shoot location", "location", "works"]),
             "travel_provided": self._bool_field(joined, "travel"),
             "housing_provided": self._bool_field(joined, "housing"),
             "rate": self._field(lines, ["rate", "pay", "salary", "compensation"]),
-            "submission_instructions": self._section(lines, ["submission", "instructions", "submit"]),
+            "submission_instructions": self._section(
+                lines, ["submission", "instructions", "submit"]
+            ),
             "visible_role_description": self._description(lines),
             "source_url": source_url,
             "import_timestamp": datetime.now(timezone.utc).isoformat(),
@@ -244,7 +330,9 @@ class SupervisedBreakdownImportService:
             "compliance_note": "Imported only visible text from the single user-opened page. No login data was stored and no crawl was performed.",
         }
 
-    def _payload_from_parsed(self, record: SupervisedBreakdownImport, parsed: dict) -> OpportunityCreate:
+    def _payload_from_parsed(
+        self, record: SupervisedBreakdownImport, parsed: dict
+    ) -> OpportunityCreate:
         classification = classify_breakdown_text(
             " ".join(
                 str(value or "")
@@ -263,8 +351,14 @@ class SupervisedBreakdownImportService:
             role=str(parsed.get("role_name") or "Role Needs Review")[:255],
             project=str(parsed.get("project_title") or "Project Needs Review")[:255],
             union=str(parsed.get("union_status") or "Unknown")[:80],
-            location=str(parsed.get("shoot_location") or parsed.get("audition_location") or "See source")[:255],
-            description=str(parsed.get("visible_role_description") or record.raw_visible_text[:1200] or "See source"),
+            location=str(
+                parsed.get("shoot_location") or parsed.get("audition_location") or "See source"
+            )[:255],
+            description=str(
+                parsed.get("visible_role_description")
+                or record.raw_visible_text[:1200]
+                or "See source"
+            ),
             source_name=record.platform_name,
             source_url=record.source_url,
             source_type="Platform Discovery",
@@ -282,7 +376,9 @@ class SupervisedBreakdownImportService:
             raw_visible_text=record.raw_visible_text,
         )
         if parsed.get("submission_instructions"):
-            details["role_details"]["submission_instructions"] = parsed.get("submission_instructions")
+            details["role_details"]["submission_instructions"] = parsed.get(
+                "submission_instructions"
+            )
         return OpportunityCreate(
             source_type="Platform Discovery",
             platform=record.platform_name,
@@ -293,12 +389,18 @@ class SupervisedBreakdownImportService:
             archetypes=[],
             union=str(parsed.get("union_status") or "Unknown")[:80],
             rate=parsed.get("rate") or None,
-            location=str(parsed.get("shoot_location") or parsed.get("audition_location") or "See source")[:255],
+            location=str(
+                parsed.get("shoot_location") or parsed.get("audition_location") or "See source"
+            )[:255],
             shoot_location=parsed.get("shoot_location") or None,
             audition_location=parsed.get("audition_location") or None,
             travel_covered=parsed.get("travel_provided"),
             housing_covered=parsed.get("housing_provided"),
-            description=str(parsed.get("visible_role_description") or record.raw_visible_text[:1200] or "See source"),
+            description=str(
+                parsed.get("visible_role_description")
+                or record.raw_visible_text[:1200]
+                or "See source"
+            ),
             original_post_url=record.source_url,
             status="open",
             breakdown_classification=classification.classification,
@@ -364,6 +466,8 @@ class SupervisedBreakdownImportService:
 
     def _description(self, lines: list[str]) -> str:
         description_lines = [
-            line for line in lines if len(line) > 35 and not line.lower().startswith(("project", "role", "rate"))
+            line
+            for line in lines
+            if len(line) > 35 and not line.lower().startswith(("project", "role", "rate"))
         ]
         return "\n".join(description_lines[:8])[:2000] or "\n".join(lines[:12])[:2000]

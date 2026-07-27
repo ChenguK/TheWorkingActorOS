@@ -14,6 +14,7 @@ export function AssetLibrary({
   capabilities?: SystemCapabilities | null;
 }) {
   const aiConfigured = capabilities?.flags.ai_configured ?? false;
+  const persistentStorageAvailable = capabilities?.flags.persistent_file_storage_available ?? true;
   const suggestionLabel = aiConfigured ? "AI-assisted tags" : "Suggested Tags";
   const analysisLabel = aiConfigured ? "AI analysis" : "Deterministic Recommendation";
   const library = useMaterialLibrary({ actor });
@@ -26,12 +27,17 @@ export function AssetLibrary({
   }
 
   return (
-    <Section title="Materials" actions={<Button onClick={() => library.setFormOpen((current) => !current)}>{library.formOpen ? "Hide Form" : "Upload Material"}</Button>}>
+    <Section title="Materials" actions={persistentStorageAvailable ? <Button onClick={() => library.setFormOpen((current) => !current)}>{library.formOpen ? "Hide Form" : "Upload Material"}</Button> : undefined}>
+      {!persistentStorageAvailable && (
+        <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          File uploads are disabled in the hosted demo because persistent storage is not configured. Local development retains upload support.
+        </p>
+      )}
       {library.isLoading && <p role="status" className="mb-3 text-sm text-slate-600">Loading Materials...</p>}
       {library.queryError && <p role="alert" className="mb-3 rounded bg-red-50 p-2 text-sm font-medium text-red-800">{library.queryError}</p>}
       {library.isRefetching && !library.isLoading && <p role="status" className="mb-3 text-xs text-slate-500">Refreshing Materials...</p>}
-      {!actor ? <EmptyState>Create an actor profile before uploading assets.</EmptyState> : (
-        library.formOpen && (
+      {!actor ? <EmptyState>{persistentStorageAvailable ? "Create an actor profile before uploading assets." : "No demo actor profile is available for Materials."}</EmptyState> : (
+        persistentStorageAvailable && library.formOpen && (
           <form className="mb-4 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-6" onSubmit={library.submit}>
             <Field label="Name"><input name="material_name" className={inputClass} value={library.form.asset_name} onChange={(e) => library.setForm({ ...library.form, asset_name: e.target.value })} required /></Field>
             <Field label="Type"><select name="material_type" className={inputClass} value={library.form.asset_type} onChange={(e) => library.setForm({ ...library.form, asset_type: e.target.value as AssetType })}>{assetTypes.map((type) => <option key={type}>{type}</option>)}</select></Field>
@@ -56,7 +62,7 @@ export function AssetLibrary({
       {library.error && <p role="alert" className="mb-3 rounded bg-red-50 p-2 text-sm font-medium text-red-800">{library.error}</p>}
       {library.deletePending && <p role="status" className="mb-3 text-xs text-slate-500">Deleting material...</p>}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {!library.isLoading && !library.queryError && library.assets.length === 0 ? <EmptyState>Upload your first headshot, reel, slate, or resume.</EmptyState> : library.assets.map((asset) => (
+        {!library.isLoading && !library.queryError && library.assets.length === 0 ? <EmptyState>{persistentStorageAvailable ? "Upload your first headshot, reel, slate, or resume." : "No sanitized demo materials are available."}</EmptyState> : library.assets.map((asset) => (
           <ActionCard
             key={asset.id}
             title={asset.asset_name}
@@ -79,12 +85,14 @@ export function AssetLibrary({
                 >
                   Edit
                 </button>
-                <ConfirmAction
-                  label="Delete"
-                  confirmLabel="Delete"
-                  message={`Delete ${asset.asset_name}?`}
-                  onConfirm={() => library.remove(asset.id)}
-                />
+                {persistentStorageAvailable && (
+                  <ConfirmAction
+                    label="Delete"
+                    confirmLabel="Delete"
+                    message={`Delete ${asset.asset_name}?`}
+                    onConfirm={() => library.remove(asset.id)}
+                  />
+                )}
               </>
             )}
             details={(

@@ -120,7 +120,10 @@ function analyticsData(overrides: Partial<AnalyticsFixture> = {}): AnalyticsFixt
         scheduler_configured: false,
         notifications_configured: false,
         source_discovery_configured: true,
-        public_profile_import_configured: true
+        public_profile_import_configured: true,
+        supervised_browser_available: false,
+        persistent_file_storage_available: false,
+        portfolio_demo: true
       },
       states: {},
       integrations: [],

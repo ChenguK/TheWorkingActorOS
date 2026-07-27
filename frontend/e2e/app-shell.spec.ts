@@ -10,6 +10,43 @@ test("app boots with navigation and no global workflow loader", async ({ page })
   expect(state.requests.filter((request) => request === "GET /system/capabilities")).toHaveLength(1);
 });
 
+test("hosted demo keeps Materials readable without upload requests", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/materials");
+
+  await expect(page.getByText("E2E Headshot")).toBeVisible();
+  await expect(page.getByRole("link", { name: "View" })).toBeVisible();
+  await expect(page.getByText(/File uploads are disabled in the hosted demo/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload Material" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  expect(state.requests.filter((request) => request === "POST /assets")).toHaveLength(0);
+});
+
+test("local durable-storage capability preserves Materials upload controls", async ({ page }) => {
+  const state = createMockState();
+  const flags = state.capabilities.flags as Record<string, unknown>;
+  flags.persistent_file_storage_available = true;
+  await installMockApi(page, state);
+  await page.goto("/materials");
+
+  await expect(page.getByRole("button", { name: "Upload Material" })).toBeVisible();
+  await expect(page.getByLabel("File")).toBeVisible();
+  await expect(page.getByText(/File uploads are disabled/)).toHaveCount(0);
+});
+
+test("hosted demo keeps profile imports text-only", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/profile");
+
+  await expect(page.getByLabel("Upload File")).toBeDisabled();
+  await expect(page.getByText(/Paste profile text or guided form answers instead/)).toBeVisible();
+  expect(
+    state.requests.filter(
+      (request) => request === "POST /platform-imports/profiles/import-upload"
+    )
+  ).toHaveLength(0);
+});
+
 test("a failed feature request stays owned by that route", async ({ page }) => {
   await installMockApi(page, createMockState({ failPath: "/intelligence/self-tapes/analytics" }));
   await page.goto("/materials");

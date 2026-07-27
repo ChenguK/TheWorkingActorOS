@@ -1,10 +1,12 @@
 import { act, createTestQueryClient, createTestQueryWrapper, renderHook, waitFor } from "../../../test/testUtils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invalidationContracts, keysForContract } from "../../../services/api/invalidationContracts";
 import { queryKeys } from "../../../services/api/queryKeys";
 import * as api from "../api";
 import {
   profileKeys, useActorProfile, useCreateActingCredit, useCreatePlatformMapping, useCreateRepresentation, useImportProfileUpload,
-  useSaveTravelPreferences, useUpdateActorProfile, useUpdateEquipmentProfile, useUpdatePlatformSubscription
+  usePlatformImportAction, usePublicImportAction, useSaveTravelPreferences, useUpdateActorProfile, useUpdateEquipmentProfile,
+  useUpdatePlatformSubscription
 } from "./useProfileQueries";
 
 vi.mock("../api", () => ({
@@ -48,7 +50,6 @@ describe("Profile query boundaries", () => {
   });
 
   it.each([
-    ["actor", () => useUpdateActorProfile(), () => vi.mocked(api.updateActorProfile).mockResolvedValue({} as never), { name: "Actor" }, profileKeys.actor],
     ["travel", () => useSaveTravelPreferences("actor-1"), () => vi.mocked(api.saveTravelPreferences).mockResolvedValue({} as never), { actor_profile_id: "actor-1" }, profileKeys.travel("actor-1")],
     ["representation", () => useCreateRepresentation(), () => vi.mocked(api.createRepresentation).mockResolvedValue({} as never), { agency_name: "Agency" }, profileKeys.representations],
     ["credit", () => useCreateActingCredit(), () => vi.mocked(api.createActingCredit).mockResolvedValue({} as never), { category: "Film" }, profileKeys.credits],
@@ -70,6 +71,55 @@ describe("Profile query boundaries", () => {
     expect(invalidate).toHaveBeenCalledTimes(4);
     for (const key of [profileKeys.platformProfiles, profileKeys.publicImports, profileKeys.mappings, profileKeys.credits]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
+    }
+  });
+
+  it("uses the exact actor-profile update contract after success", async () => {
+    vi.mocked(api.updateActorProfile).mockResolvedValue({} as never);
+    const { invalidate, result } = mutationHarness(() => useUpdateActorProfile());
+    await act(async () => result.current.mutateAsync({ name: "Actor" } as never));
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      keysForContract(invalidationContracts.actorProfileUpdate)
+    );
+  });
+
+  it("invalidates nothing after an actor-profile update failure", async () => {
+    vi.mocked(api.updateActorProfile).mockRejectedValue(new Error("profile update failed"));
+    const { invalidate, result } = mutationHarness(() => useUpdateActorProfile());
+    await act(async () => {
+      await expect(result.current.mutateAsync({ name: "Actor" } as never)).rejects.toThrow("profile update failed");
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("uses the exact actor-linked platform approval contract after success", async () => {
+    vi.mocked(api.approvePlatformProfileImport).mockResolvedValue({} as never);
+    const { invalidate, result } = mutationHarness(() => usePlatformImportAction());
+    await act(async () => result.current.mutateAsync({ id: "profile-1", action: "approve" }));
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(
+      keysForContract(invalidationContracts.actorLinkedPlatformProfileApprove)
+    );
+  });
+
+  it("invalidates nothing after an actor-linked platform approval failure", async () => {
+    vi.mocked(api.approvePlatformProfileImport).mockRejectedValue(new Error("approval failed"));
+    const { invalidate, result } = mutationHarness(() => usePlatformImportAction());
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: "profile-1", action: "approve" })).rejects.toThrow("approval failed");
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("keeps public-profile approval separate from actor-linked state", async () => {
+    vi.mocked(api.approvePublicProfileImport).mockResolvedValue({} as never);
+    const { invalidate, result } = mutationHarness(() => usePublicImportAction());
+    await act(async () => result.current.mutateAsync({ id: "public-1", action: "approve" }));
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      profileKeys.publicImports,
+      profileKeys.mappings
+    ]);
+    for (const key of [profileKeys.platformProfiles, profileKeys.actor, profileKeys.credits]) {
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: key });
     }
   });
 });

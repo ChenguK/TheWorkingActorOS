@@ -9,7 +9,7 @@ from app.db.models import Asset
 from app.repositories.asset import AssetRepository
 from app.schemas.asset import AssetUpdate
 from app.services.actor_work_event_service import ActorWorkEventService
-from app.services.file_storage_service import FileStorageService
+from app.services.file_storage_service import FileStorageService, require_persistent_file_storage
 from app.services.workflow_connector_service import WorkflowConnectorService
 
 
@@ -36,30 +36,39 @@ class AssetService:
         upload: UploadFile,
         career_task_id=None,
     ) -> Asset:
+        require_persistent_file_storage()
         path, size = self.storage.save_upload(upload)
-        today = date.today()
-        asset = Asset(
-            actor_profile_id=actor_profile_id,
-            asset_name=asset_name,
-            asset_type=asset_type,
-            description=description,
-            tags=tags,
-            archetype_names=archetype_names,
-            local_file_path=path,
-            original_filename=upload.filename,
-            mime_type=upload.content_type,
-            file_size_bytes=size,
-            upload_date=today,
-            last_updated_date=today,
-            expiration_warning_date=self._warning_date(asset_type, today),
-            freshness_status="Current",
-        )
-        asset = self.repo.add(asset)
-        self.db.flush()
-        WorkflowConnectorService(self.db).after_asset_created(asset, career_task_id)
-        ActorWorkEventService(self.db).material_uploaded(asset, career_task_id=career_task_id)
-        self.db.commit()
-        return asset
+        try:
+            today = date.today()
+            asset = Asset(
+                actor_profile_id=actor_profile_id,
+                asset_name=asset_name,
+                asset_type=asset_type,
+                description=description,
+                tags=tags,
+                archetype_names=archetype_names,
+                local_file_path=path,
+                original_filename=upload.filename,
+                mime_type=upload.content_type,
+                file_size_bytes=size,
+                upload_date=today,
+                last_updated_date=today,
+                expiration_warning_date=self._warning_date(asset_type, today),
+                freshness_status="Current",
+            )
+            asset = self.repo.add(asset)
+            self.db.flush()
+            WorkflowConnectorService(self.db).after_asset_created(asset, career_task_id)
+            ActorWorkEventService(self.db).material_uploaded(asset, career_task_id=career_task_id)
+            self.db.commit()
+            return asset
+        except Exception:
+            self.db.rollback()
+            try:
+                self.storage.delete_file(path)
+            except OSError:
+                pass
+            raise
 
     def get(self, asset_id) -> Asset:
         return self.repo.get(asset_id)
@@ -77,6 +86,7 @@ class AssetService:
         return asset
 
     def delete(self, asset_id) -> None:
+        require_persistent_file_storage()
         asset = self.repo.get(asset_id)
         path = asset.local_file_path
         self.repo.delete(asset)

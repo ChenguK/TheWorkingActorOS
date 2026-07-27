@@ -24,7 +24,10 @@ const capabilities: SystemCapabilities = {
     scheduler_configured: false,
     notifications_configured: false,
     source_discovery_configured: true,
-    public_profile_import_configured: true
+    public_profile_import_configured: true,
+    supervised_browser_available: false,
+    persistent_file_storage_available: false,
+    portfolio_demo: true
   },
   states: {
     drive_time_calculation: {
@@ -57,6 +60,15 @@ const capabilities: SystemCapabilities = {
       what_it_enables: "AI-assisted parsing and tagging",
       fallback_behavior: "Deterministic suggestions",
       setup_instructions: "Set OPENAI_API_KEY on the backend."
+    },
+    {
+      id: "supervised_browser",
+      name: "Supervised Browser Import",
+      status: "Unavailable in Portfolio Demo",
+      configured: false,
+      what_it_enables: "A user-controlled local browser",
+      fallback_behavior: "Manual breakdown entry or pasted breakdown text.",
+      setup_instructions: "Available only in local development."
     }
   ],
   labels: {
@@ -103,6 +115,8 @@ describe("Settings feature", () => {
     expect(screen.getByText("OpenAI API")).toBeInTheDocument();
     expect(screen.getByText("Drive-time calculation")).toBeInTheDocument();
     expect(screen.getByText("Deterministic suggestions")).toBeInTheDocument();
+    expect(screen.getByText("Supervised Browser Import")).toBeInTheDocument();
+    expect(screen.getByText("Manual breakdown entry or pasted breakdown text.")).toBeInTheDocument();
     expect(screen.getByText("Not Configured")).toBeInTheDocument();
   });
 

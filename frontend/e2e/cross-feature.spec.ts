@@ -19,19 +19,25 @@ test("breakdown creates an Auditions submission without a global reload", async 
   expect(mutationRequests.filter((request) => request === "GET /assets")).toHaveLength(1);
 });
 
-test("audition deadline propagates to Calendar across the DST boundary", async ({ page }) => {
+test("audition submission relies on automatic Calendar projection", async ({ page }) => {
   const state = await installMockApi(page);
   await page.goto("/auditions?breakdownId=opp-1");
   await expect(page.locator('select[name="breakdown"]').first()).toHaveValue("opp-1");
+  await expect(page.getByLabel("Add to calendar")).toHaveCount(0);
+  await expect(page.getByText("Relevant submission, self-tape, audition, and callback dates are added to your calendar automatically.")).toBeVisible();
   await page.getByLabel("Audition/Tape Due Date").fill("2026-03-08T01:30");
   await page.getByLabel("Create self-tape task if due date exists").check();
-  await page.getByLabel("Add to calendar").check();
+  const beforeMutation = state.requests.length;
   await page.getByRole("button", { name: "Submitted/Auditioned for this role" }).click();
-  await expect.poll(() => state.calendarEvents.length).toBe(1);
+  await expect.poll(() => state.submissions.length).toBe(1);
   await expect.poll(() => state.workflowTapes.length).toBe(1);
-  await page.getByRole("link", { name: "Calendar" }).click();
-  await expect(page.getByText("DST Detective · Spring Forward").filter({ visible: true }).first()).toBeVisible();
-  expect(state.calendarEvents[0].start_datetime).toBe("2026-03-08T01:30");
+  await expect.poll(() => state.requests.filter((request) => request === "POST /intelligence/audition-journal").length).toBe(1);
+  const requests = state.requests.slice(beforeMutation);
+  expect(requests.filter((request) => request === "POST /submissions")).toHaveLength(1);
+  expect(requests.filter((request) => request === "POST /command-center/self-tapes")).toHaveLength(1);
+  expect(requests.filter((request) => request === "POST /operations/calendar/events")).toHaveLength(0);
+  expect(requests.filter((request) => request === "POST /intelligence/audition-journal")).toHaveLength(1);
+  expect(state.calendarEvents).toHaveLength(0);
   expect(state.workflowTapes).toHaveLength(1);
 });
 

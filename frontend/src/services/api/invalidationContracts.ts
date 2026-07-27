@@ -23,14 +23,19 @@ export const publicInvalidationKeys = {
   analyticsIntelligence: queryKeys.analytics.list({ resource: "intelligenceDashboard" }),
   analyticsIndustryTrends: queryKeys.analytics.list({ resource: "industryTrends" }),
   analyticsMaterialPerformance: queryKeys.analytics.list({ resource: "materialPerformance" }),
-  commandCenter: queryKeys.chiefOfStaff.list({ resource: "commandCenter" })
+  commandCenter: queryKeys.chiefOfStaff.list({ resource: "commandCenter" }),
+  profileActor: queryKeys.profile.list({ resource: "actor" }),
+  profileCredits: queryKeys.profile.list({ resource: "actingCredits" }),
+  profilePlatformProfiles: queryKeys.profile.list({ resource: "platformProfiles" }),
+  profilePublicImports: queryKeys.profile.list({ resource: "publicProfileImports" }),
+  profileMappings: queryKeys.profile.list({ resource: "platformMappings" })
 } as const;
 
 export type PublicInvalidationKey = keyof typeof publicInvalidationKeys;
 export type InvalidationTiming = "synchronous" | "asynchronous" | "none";
 
 export type InvalidationContract = {
-  owner: "auditions" | "breakdowns" | "career" | "materials" | "settings" | "chief-of-staff" | "calendar";
+  owner: "auditions" | "breakdowns" | "career" | "materials" | "settings" | "chief-of-staff" | "calendar" | "profile";
   operation: string;
   direct: readonly PublicInvalidationKey[];
   derived: readonly PublicInvalidationKey[];
@@ -40,6 +45,36 @@ export type InvalidationContract = {
 };
 
 export const invalidationContracts = {
+  actorProfileUpdate: {
+    owner: "profile", operation: "actorProfile.update",
+    direct: ["profileActor"],
+    derived: ["breakdownOpportunities", "breakdownHidden", "breakdownReadiness", "breakdownMaterialMatches"],
+    forbidden: [
+      "profileCredits", "profilePlatformProfiles", "profilePublicImports", "profileMappings",
+      "submissions", "workflowSelfTapes", "callbacks", "auditionPerformanceNotes", "calendarEvents",
+      "journalEntries", "careerTasks", "breakdownRecommendations", "breakdownQueue", "relationships",
+      "relationshipAnalytics", "materials", "reusableSelfTapes", "analyticsOperations",
+      "analyticsIntelligence", "analyticsIndustryTrends", "analyticsMaterialPerformance",
+      "commandCenter", "dashboardPreferences", "executiveBriefs"
+    ],
+    timing: "synchronous",
+    reason: "ActorProfileService synchronously updates the actor and recomputes demographic eligibility and enriched state for every non-demo opportunity. Visible/hidden membership, readiness, and material-match inputs can therefore change; no other frontend-owned records are written."
+  },
+  actorLinkedPlatformProfileApprove: {
+    owner: "profile", operation: "platformProfile.approve",
+    direct: ["profilePlatformProfiles", "profileMappings", "profileActor", "profileCredits"],
+    derived: [],
+    forbidden: [
+      "profilePublicImports", "submissions", "workflowSelfTapes", "callbacks", "auditionPerformanceNotes",
+      "calendarEvents", "journalEntries", "careerTasks", "breakdownOpportunities", "breakdownHidden",
+      "breakdownRecommendations", "breakdownQueue", "breakdownReadiness", "breakdownMaterialMatches",
+      "relationships", "relationshipAnalytics", "materials", "reusableSelfTapes", "analyticsOperations",
+      "analyticsIntelligence", "analyticsIndustryTrends", "analyticsMaterialPerformance",
+      "commandCenter", "dashboardPreferences", "executiveBriefs"
+    ],
+    timing: "synchronous",
+    reason: "PlatformImportService approval updates the platform profile, creates asset mappings and acting credits, and merges imported skills and accents into its linked actor. It does not invoke actor-profile opportunity refresh, so opportunity-derived owners are intentionally excluded."
+  },
   opportunityCreate: {
     owner: "breakdowns", operation: "opportunity.create",
     direct: ["breakdownOpportunities", "breakdownHidden"],

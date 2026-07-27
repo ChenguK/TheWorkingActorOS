@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -9,6 +9,11 @@ from app.core.database import get_db
 from app.agents.asset_analysis_agent import AssetAnalysisAgent
 from app.schemas.asset import AssetRead, AssetUpdate
 from app.services.asset_service import AssetService
+from app.services.file_storage_service import (
+    FileStorageService,
+    PersistentFileStorageUnavailableError,
+    require_persistent_file_storage,
+)
 
 router = APIRouter()
 
@@ -42,16 +47,20 @@ def create_asset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    return AssetService(db).create(
-        actor_profile_id=actor_profile_id,
-        asset_name=asset_name,
-        asset_type=asset_type,
-        description=description,
-        tags=parse_list(tags),
-        archetype_names=parse_list(archetype_names),
-        upload=file,
-        career_task_id=career_task_id,
-    )
+    try:
+        require_persistent_file_storage()
+        return AssetService(db).create(
+            actor_profile_id=actor_profile_id,
+            asset_name=asset_name,
+            asset_type=asset_type,
+            description=description,
+            tags=parse_list(tags),
+            archetype_names=parse_list(archetype_names),
+            upload=file,
+            career_task_id=career_task_id,
+        )
+    except PersistentFileStorageUnavailableError as exc:
+        raise persistent_storage_unavailable() from exc
 
 
 @router.get("/{asset_id}", response_model=AssetRead)
@@ -62,8 +71,18 @@ def get_asset(asset_id: UUID, db: Session = Depends(get_db)):
 @router.get("/{asset_id}/file")
 def view_asset_file(asset_id: UUID, db: Session = Depends(get_db)):
     asset = AssetService(db).get(asset_id)
+    try:
+        path = FileStorageService().existing_file(asset.local_file_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "asset_file_not_found",
+                "message": "The stored file is unavailable.",
+            },
+        ) from exc
     return FileResponse(
-        asset.local_file_path,
+        path,
         media_type=asset.mime_type,
         filename=asset.original_filename or asset.asset_name,
     )
@@ -82,4 +101,18 @@ def update_asset(asset_id: UUID, payload: AssetUpdate, db: Session = Depends(get
 
 @router.delete("/{asset_id}", status_code=204)
 def delete_asset(asset_id: UUID, db: Session = Depends(get_db)):
-    AssetService(db).delete(asset_id)
+    try:
+        require_persistent_file_storage()
+        AssetService(db).delete(asset_id)
+    except PersistentFileStorageUnavailableError as exc:
+        raise persistent_storage_unavailable() from exc
+
+
+def persistent_storage_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "persistent_file_storage_unavailable",
+            "message": ("File mutations are disabled because durable storage is not configured."),
+        },
+    )

@@ -6,7 +6,15 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, AuditionCalendarEvent, CareerDevelopmentTask, DailyPlatformCheckIn, Opportunity, SelfTapeWorkflow, Submission
+from app.db.models import (
+    Asset,
+    AuditionCalendarEvent,
+    CareerDevelopmentTask,
+    DailyPlatformCheckIn,
+    Opportunity,
+    SelfTapeWorkflow,
+    Submission,
+)
 from app.services.journal_service import JournalService, journal_date_from_datetime
 
 
@@ -22,7 +30,11 @@ class ActorWorkEventService:
         self.journal = JournalService(db)
 
     def platform_check_in(self, check_in: DailyPlatformCheckIn) -> None:
-        platform = check_in.platform_subscription.platform_name if check_in.platform_subscription else "casting platform"
+        platform = (
+            check_in.platform_subscription.platform_name
+            if check_in.platform_subscription
+            else "casting platform"
+        )
         self.journal.record_once(
             event_type="Platform Check-In",
             title=f"Checked {platform}",
@@ -52,8 +64,6 @@ class ActorWorkEventService:
             linked_breakdown_id=submission.opportunity_id,
             linked_audition_id=submission.id,
         )
-        if submission.opportunity:
-            self._calendar_from_opportunity(submission.opportunity, submission_id=submission.id)
 
     def submission_status_changed(
         self,
@@ -88,14 +98,25 @@ class ActorWorkEventService:
     def self_tape_completed(self, workflow: SelfTapeWorkflow) -> None:
         self.journal.record_once(
             event_type="Self-Tape Completed",
-            title=f"Completed self-tape for {workflow.opportunity.role}" if workflow.opportunity else "Completed self-tape",
+            title=f"Completed self-tape for {workflow.opportunity.role}"
+            if workflow.opportunity
+            else "Completed self-tape",
             description=workflow.slate_requirements,
             entry_date=journal_date_from_datetime(workflow.updated_at),
             linked_breakdown_id=workflow.opportunity_id,
             linked_audition_id=workflow.submission_id,
         )
 
-    def callback_added(self, *, event_name: str, opportunity: Opportunity | None, opportunity_id=None, submission_id=None, notes=None, event_datetime=None) -> None:
+    def callback_added(
+        self,
+        *,
+        event_name: str,
+        opportunity: Opportunity | None,
+        opportunity_id=None,
+        submission_id=None,
+        notes=None,
+        event_datetime=None,
+    ) -> None:
         self.journal.record_once(
             event_type="Callback Received",
             title=f"{event_name}: {opportunity.role}" if opportunity else event_name,
@@ -105,7 +126,15 @@ class ActorWorkEventService:
             linked_audition_id=submission_id,
         )
 
-    def callback_completed(self, *, event_name: str, outcome: str | None, opportunity_id=None, submission_id=None, event_datetime=None) -> None:
+    def callback_completed(
+        self,
+        *,
+        event_name: str,
+        outcome: str | None,
+        opportunity_id=None,
+        submission_id=None,
+        event_datetime=None,
+    ) -> None:
         if not outcome:
             return
         self.journal.record_once(
@@ -152,7 +181,8 @@ class ActorWorkEventService:
                 submission_id=submission_id,
                 location=None,
                 is_virtual=True,
-                notes=(opportunity.role_details or {}).get("self_tape_submission_link") or getattr(opportunity, "submission_method", None),
+                notes=(opportunity.role_details or {}).get("self_tape_submission_link")
+                or getattr(opportunity, "submission_method", None),
             )
         elif opportunity.audition_type == "Virtual" and opportunity.audition_deadline:
             self._calendar_once(
@@ -177,7 +207,9 @@ class ActorWorkEventService:
             )
         if opportunity.callback_date:
             self._calendar_once(
-                event_type="Virtual Callback" if opportunity.audition_type == "Virtual" else "In-Person Callback",
+                event_type="Virtual Callback"
+                if opportunity.audition_type == "Virtual"
+                else "In-Person Callback",
                 title=f"Callback: {opportunity.role}",
                 start_datetime=opportunity.callback_date,
                 opportunity_id=opportunity.id,
@@ -193,9 +225,13 @@ class ActorWorkEventService:
             .where(AuditionCalendarEvent.start_datetime == values["start_datetime"])
         )
         if values.get("opportunity_id"):
-            statement = statement.where(AuditionCalendarEvent.opportunity_id == values["opportunity_id"])
+            statement = statement.where(
+                AuditionCalendarEvent.opportunity_id == values["opportunity_id"]
+            )
         if values.get("submission_id"):
-            statement = statement.where(AuditionCalendarEvent.submission_id == values["submission_id"])
+            statement = statement.where(
+                AuditionCalendarEvent.submission_id == values["submission_id"]
+            )
         existing = self.db.scalar(statement)
         if existing:
             return existing

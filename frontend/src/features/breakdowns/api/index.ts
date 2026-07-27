@@ -7,7 +7,7 @@ import type {
   Opportunity, SubmissionAutomationQueueItem,
   RecommendationFeedback
 } from "../../../types/domain";
-import type { DiscoveryReport, DiscoveryRunRequest, DiscoveryRunResult } from "../types";
+import type { DiscoveryRunRequest, DiscoveryRunResult } from "../types";
 
 export function listBreakdowns() {
   return api.get<Opportunity[]>("/opportunities");
@@ -61,10 +61,6 @@ export function listMaterialMatches(query = "include_hidden=false&min_score=15")
 
 export function sendRecommendationFeedback(recommendationId: string, payload: unknown) {
   return api.post<RecommendationFeedback>(`/agents/recommendations/${recommendationId}/feedback`, payload);
-}
-
-export function getDiscoveryReport() {
-  return api.get<DiscoveryReport>("/automation/discovery/report");
 }
 
 export function runBreakdownDiscovery({ mode, searchModes, specificArchetype }: DiscoveryRunRequest) {

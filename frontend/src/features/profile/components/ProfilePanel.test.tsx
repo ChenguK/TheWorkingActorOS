@@ -91,6 +91,39 @@ describe("Profile feature", () => {
     expect(createButton).toBeEnabled();
   });
 
+  it("uses text-only profile imports when hosted storage is unavailable", async () => {
+    const user = userEvent.setup();
+    vi.mocked(profileApi.importProfileUpload).mockResolvedValue({
+      platform_name: "Actors Access",
+      import_status: "Draft"
+    } as never);
+    renderWithRouter(
+      <PlatformProfileImportAssistant
+        actor={null}
+        assets={[]}
+        profiles={[]}
+        publicImports={[]}
+        mappings={[]}
+        capabilities={{
+          flags: { persistent_file_storage_available: false }
+        } as never}
+      />
+    );
+
+    expect(screen.getByLabelText("Upload File")).toBeDisabled();
+    expect(screen.getByText(/File uploads are disabled in the hosted demo/)).toBeInTheDocument();
+    await user.type(
+      screen.getByLabelText("Profile Text / Guided Form Answers"),
+      "Sanitized profile text"
+    );
+    await user.click(screen.getByRole("button", { name: "Create Draft Import" }));
+
+    expect(profileApi.importProfileUpload).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(profileApi.importProfileUpload).mock.calls[0][0];
+    expect(payload.get("file")).toBeNull();
+    expect(payload.get("raw_import_text")).toBe("Sanitized profile text");
+  });
+
   it("shows professional identity, demographics, languages, role preferences, and representation from saved Profile data", () => {
     renderWithRouter(
       <ActorProfilePanel

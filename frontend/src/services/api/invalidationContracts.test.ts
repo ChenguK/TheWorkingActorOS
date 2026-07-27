@@ -21,7 +21,8 @@ describe("cross-feature invalidation contracts", () => {
       "opportunity.create", "opportunity.update", "opportunity.manualParse", "opportunity.deepParse", "opportunity.strategyGenerate", "opportunity.reject", "opportunity.delete",
       "recommendation.feedbackCreate",
       "submissionQueue.execute", "callback.change", "workflowSelfTape.update", "careerTask.change",
-      "reusableSelfTape.change", "provider.change", "platformCheckIn.update", "calendarEvent.change"
+      "reusableSelfTape.change", "provider.change", "platformCheckIn.update", "calendarEvent.change",
+      "actorProfile.update", "platformProfile.approve"
     ]));
   });
 
@@ -105,6 +106,48 @@ describe("cross-feature invalidation contracts", () => {
       publicInvalidationKeys.breakdownReadiness,
       publicInvalidationKeys.breakdownMaterialMatches,
       publicInvalidationKeys.commandCenter
+    ]);
+  });
+
+  it("records exact Profile mutation ownership without speculative cross-feature owners", () => {
+    expect(invalidationContracts.actorProfileUpdate).toEqual({
+      owner: "profile",
+      operation: "actorProfile.update",
+      direct: ["profileActor"],
+      derived: ["breakdownOpportunities", "breakdownHidden", "breakdownReadiness", "breakdownMaterialMatches"],
+      forbidden: expect.arrayContaining([
+        "profileCredits", "profilePlatformProfiles", "profilePublicImports", "profileMappings",
+        "submissions", "calendarEvents", "journalEntries", "materials", "analyticsIntelligence", "commandCenter"
+      ]),
+      timing: "synchronous",
+      reason: expect.any(String)
+    });
+    expect(keysForContract(invalidationContracts.actorProfileUpdate)).toEqual([
+      publicInvalidationKeys.profileActor,
+      publicInvalidationKeys.breakdownOpportunities,
+      publicInvalidationKeys.breakdownHidden,
+      publicInvalidationKeys.breakdownReadiness,
+      publicInvalidationKeys.breakdownMaterialMatches
+    ]);
+
+    expect(invalidationContracts.actorLinkedPlatformProfileApprove).toEqual({
+      owner: "profile",
+      operation: "platformProfile.approve",
+      direct: ["profilePlatformProfiles", "profileMappings", "profileActor", "profileCredits"],
+      derived: [],
+      forbidden: expect.arrayContaining([
+        "profilePublicImports", "breakdownOpportunities", "breakdownHidden", "breakdownReadiness",
+        "breakdownMaterialMatches", "submissions", "calendarEvents", "journalEntries", "materials",
+        "analyticsIntelligence", "commandCenter"
+      ]),
+      timing: "synchronous",
+      reason: expect.any(String)
+    });
+    expect(keysForContract(invalidationContracts.actorLinkedPlatformProfileApprove)).toEqual([
+      publicInvalidationKeys.profilePlatformProfiles,
+      publicInvalidationKeys.profileMappings,
+      publicInvalidationKeys.profileActor,
+      publicInvalidationKeys.profileCredits
     ]);
   });
 

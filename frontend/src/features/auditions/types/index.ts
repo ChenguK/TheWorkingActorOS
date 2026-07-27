@@ -33,7 +33,6 @@ export type SubmissionFormState = {
   self_tape_submission_link: string;
   preparation_instructions: string;
   submission_instructions: string;
-  create_calendar: boolean;
   create_journal: boolean;
   create_self_tape: boolean;
   submission_fee: string;

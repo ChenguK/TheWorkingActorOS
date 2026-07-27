@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: working-actor-os-api
+    runtime: python
+    plan: starter
+    rootDir: backend
+    branch: release/portfolio-readiness
+    autoDeployTrigger: checksPass
+    buildCommand: python -m pip install -r requirements.txt
+    preDeployCommand: python -m alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.13
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: ENVIRONMENT
+        value: portfolio_demo
+      - key: DURABLE_FILE_STORAGE_ENABLED
+        value: "false"
+      - key: UPLOAD_DIR
+        value: /tmp/working-actor-os-uploads
+      - key: TRAVEL_PROVIDER
+        value: manual
+      - key: WEB_SEARCH_PROVIDER
+        value: none
+      - key: SCHEDULER_ENABLED
+        value: "false"
+      - key: NOTIFICATIONS_ENABLED
+        value: "false"
+      - key: PUBLIC_PROFILE_IMPORT_ENABLED
+        value: "false"
+      - key: SUPERVISED_BROWSER_ENABLED
+        value: "false"
+      - key: OPENAI_API_KEY
+        value: ""
+      - key: PARALLEL_API_KEY
+        value: ""
+      - key: GOOGLE_MAPS_API_KEY
+        value: ""
+      - key: MAPBOX_ACCESS_TOKEN
+        value: ""
+      - key: OPENROUTESERVICE_API_KEY
+        value: ""

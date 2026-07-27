@@ -3,7 +3,6 @@ import { api } from "../../../services/api";
 import {
   approveSubmissionQueueItem,
   executeSubmissionQueueItem,
-  getDiscoveryReport,
   queueSubmissionFromRecommendation,
   rejectSubmissionQueueItem,
   runBreakdownDiscovery
@@ -39,14 +38,6 @@ describe("Breakdowns feature API", () => {
     expect(api.post).toHaveBeenCalledWith(
       "/automation/discovery/run?mode=Theater&search_modes=Match+My+Archetypes"
     );
-  });
-
-  it("loads the Discovery Report through the feature API", async () => {
-    vi.mocked(api.get).mockResolvedValue({ generated_at: "2026-07-16T00:00:00Z" });
-
-    await getDiscoveryReport();
-
-    expect(api.get).toHaveBeenCalledWith("/automation/discovery/report");
   });
 
   it("owns all submission queue endpoint calls", async () => {

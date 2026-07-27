@@ -61,10 +61,6 @@ export function deleteCallbackEvent(eventId: string) {
   return api.delete(`/intelligence/callback-events/${eventId}`);
 }
 
-export function createAuditionCalendarEvent(payload: unknown) {
-  return api.post("/operations/calendar/events", payload);
-}
-
 export function createAuditionNote(payload: unknown) {
   return api.post<AuditionJournalEntry>("/intelligence/audition-journal", payload);
 }
