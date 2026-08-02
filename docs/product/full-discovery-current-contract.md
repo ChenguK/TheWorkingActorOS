@@ -6,6 +6,14 @@ Branch: `feature/full-discovery-capabilities`
 
 This document characterizes current behavior. It is not the desired routing policy. All external inputs in the tests are synthetic and all network/provider calls are mocked.
 
+## Actor-specific public-web query contract
+
+`backend/app/automation/discovery/public_web_search.py::PublicWebBreakdownSearch.search_queries` now builds a deterministic, layered Film/TV query plan from persisted actor data. It can use the primary and valid secondary playable-age ranges; configured gender identities, including an explicit open-gender value; chosen racial and ethnic identities; union/SAG status; languages; supported Film/TV included-role types; general current location; local-work, flight/international, self-tape, and virtual-audition travel flags; and bounded `Asset.archetype_names` values.
+
+The planner emits at most 6 queries of at most 220 characters each. It uses at most 3 archetypes, 3 location/travel terms, and 3 languages, preserves saved-field order, deduplicates case-insensitively, and uses layered queries instead of a Cartesian product. The Parallel request remains one provider call with `max_results=10`.
+
+Missing dimensions are omitted rather than replaced with demographic, language, union, age, location, or archetype defaults. Excluded or unsupported roles do not become positive terms, and the plan remains Film/TV-only. The planner does not read or include actor name, contact/account identifiers, exact addresses or coordinates, notes, availability, agency contacts, asset filenames/paths/descriptions, resume or headshot content, or medical data. Address-like current-location values are rejected rather than searched. Disabled provider configuration and `portfolio_demo` both produce zero queries and zero Parallel calls.
+
 ## Request-to-persistence flow
 
 1. `frontend/src/features/breakdowns/components/BreakdownDiscovery.tsx::AutomationDashboard.runDiscovery` invokes `useBreakdownDiscovery.run`; `frontend/src/features/breakdowns/api/index.ts::runBreakdownDiscovery` sends `POST /automation/discovery/run`.
