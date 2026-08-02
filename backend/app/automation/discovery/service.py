@@ -197,20 +197,32 @@ class DiscoveryAutomationService:
             if self._provider_settings(plugin.implementation_key).enabled
             and self._research_source_allowed(self._provider_settings(plugin.implementation_key))
             and self._source_supports_mode(self._provider_settings(plugin.implementation_key), discovery_mode)
+            and self._provider_is_operational(plugin)
+            and self._health_allows_operation(self._provider_settings(plugin.implementation_key))
         ]
         results = []
+        attempted_plugins: list[DiscoveryProvider] = []
         visible_total = 0
         for plugin in enabled:
             remaining = None if target_visible is None else max(target_visible - visible_total, 0)
             if remaining == 0:
                 break
-            result = self.run_source(
-                plugin.implementation_key,
-                discovery_mode=discovery_mode,
-                visible_limit=remaining,
-                search_modes=search_modes,
-                specific_archetype=specific_archetype,
-            )
+            attempted_plugins.append(plugin)
+            try:
+                result = self.run_source(
+                    plugin.implementation_key,
+                    discovery_mode=discovery_mode,
+                    visible_limit=remaining,
+                    search_modes=search_modes,
+                    specific_archetype=specific_archetype,
+                )
+            except Exception:
+                logger.exception("Discovery source check failed for %s", plugin.implementation_key)
+                result = self._empty_result(
+                    plugin.name,
+                    skipped=True,
+                    reason="Source check failed; no candidates were returned.",
+                )
             results.append(result)
             visible_total += result.get("visible", 0)
         public_web_result = self._run_public_web_search(
@@ -226,7 +238,7 @@ class DiscoveryAutomationService:
         hidden_total = sum(item.get("hidden", 0) for item in results)
         travel_exception_total = sum(item.get("travel_exceptions", 0) for item in results)
         rejection_summary = self._merge_rejection_summaries(results)
-        coverage = self._coverage_report(discovery_mode, enabled)
+        coverage = self._coverage_report(discovery_mode, attempted_plugins, results)
         discovery_report = self._discovery_report(results, public_web_result["summary"])
         return {
             "discovery_mode": discovery_mode,
@@ -1053,7 +1065,12 @@ class DiscoveryAutomationService:
                 merged[reason] = merged.get(reason, 0) + int(count or 0)
         return {key: count for key, count in merged.items() if count}
 
-    def _coverage_report(self, discovery_mode: str, checked_plugins: list[DiscoveryProvider]) -> dict:
+    def _coverage_report(
+        self,
+        discovery_mode: str,
+        attempted_plugins: list[DiscoveryProvider],
+        results: list[dict] | None = None,
+    ) -> dict:
         settings_rows = list(
             self.db.scalars(
                 select(DiscoveryProviderSettings).order_by(
@@ -1062,19 +1079,35 @@ class DiscoveryAutomationService:
                 )
             )
         )
-        checked_keys = {plugin.implementation_key for plugin in checked_plugins}
+        plugins = {plugin.implementation_key: plugin for plugin in self.registry.list()}
+        attempted_keys = {plugin.implementation_key for plugin in attempted_plugins}
         mode_label = "Film/TV" if discovery_mode == "FilmTV" else discovery_mode
-        mode_source_label = "approved active sources" if discovery_mode == "All" else f"approved active {mode_label} sources"
-        active_mode_sources = [
+        mode_source_label = (
+            "approved active sources"
+            if discovery_mode == "All"
+            else f"approved active {mode_label} sources"
+        )
+        approved_records = [
             settings
             for settings in settings_rows
-            if settings.enabled
-            and self._research_source_allowed(settings)
-            and self._source_supports_mode(settings, discovery_mode)
+            if settings.enabled and self._research_source_allowed(settings)
+        ]
+        active_records = list(approved_records)
+        active_mode_sources = [
+            settings
+            for settings in active_records
+            if self._source_supports_mode(settings, discovery_mode)
+        ]
+        operational_mode_sources = [
+            settings
+            for settings in active_mode_sources
+            if (plugin := plugins.get(settings.provider_key)) is not None
+            and self._provider_is_operational(plugin)
+            and self._health_allows_operation(settings)
         ]
         skipped: list[dict] = []
         for settings in settings_rows:
-            if settings.provider_key in checked_keys:
+            if settings.provider_key in attempted_keys:
                 continue
             reason = self._skip_reason(settings, discovery_mode)
             if reason:
@@ -1096,18 +1129,43 @@ class DiscoveryAutomationService:
                     }
                 )
         suggested_count = self._suggested_sources_awaiting_approval(discovery_mode)
-        active_count = len(active_mode_sources)
+        result_rows = [result for result in (results or []) if not result.get("public_web_search")]
+        successful_results = [result for result in result_rows if not result.get("skipped")]
+        operational_count = len(operational_mode_sources)
         return {
-            "approved_active_sources_checked": len(checked_plugins),
-            "approved_active_source_names_checked": [plugin.name for plugin in checked_plugins],
+            "approved_source_records": len(approved_records),
+            "approved_source_record_names": [
+                settings.display_name for settings in approved_records
+            ],
+            "active_source_records": len(active_records),
+            "operational_mode_sources_available": operational_count,
+            "operational_mode_source_names": [
+                settings.display_name for settings in operational_mode_sources
+            ],
+            "sources_attempted": len(attempted_plugins),
+            "source_names_attempted": [plugin.name for plugin in attempted_plugins],
+            "successful_source_checks": len(successful_results),
+            "source_candidates_returned": sum(
+                int(result.get("total_found", 0) or 0) for result in successful_results
+            ),
+            "sources_returning_candidates": sum(
+                int(result.get("total_found", 0) or 0) > 0 for result in successful_results
+            ),
+            "approved_active_sources_checked": len(successful_results),
+            "approved_active_source_names_checked": [
+                result.get("source") for result in successful_results if result.get("source")
+            ],
             "eligible_sources_skipped": len(skipped),
             "skipped_source_reasons": skipped,
-            "approved_mode_sources_available": active_count,
-            "approved_mode_sources_label": mode_source_label,
+            "approved_mode_sources_available": operational_count,
+            "approved_mode_sources_label": mode_source_label.replace(
+                "approved active", "operational"
+            ),
             "suggested_sources_awaiting_approval": suggested_count,
-            "coverage_level": self._coverage_level(active_count),
+            "coverage_level": self._coverage_level(operational_count),
             "scope_note": (
-                "This search only checked active approved breakdown sources configured in The Working Actor OS. "
+                "Approved source records are counted separately from operational adapters. "
+                "Coverage reflects only active, mode-eligible operational adapters. "
                 "It did not search the full public web, all casting platforms, all regional productions, or all independent films."
             ),
         }
@@ -1141,6 +1199,8 @@ class DiscoveryAutomationService:
         return result[0] if result else None
 
     def _coverage_level(self, active_source_count: int) -> str:
+        if active_source_count == 0:
+            return "No Coverage"
         if active_source_count <= 2:
             return "Very Limited"
         if active_source_count <= 5:
@@ -1158,7 +1218,37 @@ class DiscoveryAutomationService:
             mode_label = "Film/TV" if discovery_mode == "FilmTV" else discovery_mode
             family = self._source_family(settings)
             return f"Classified as {family}; skipped for {mode_label} discovery."
+        plugin = next(
+            (
+                candidate
+                for candidate in self.registry.list()
+                if candidate.implementation_key == settings.provider_key
+            ),
+            None,
+        )
+        if plugin is None:
+            return "No registered discovery adapter is available."
+        if not self._provider_is_operational(plugin):
+            if plugin.provider_kind in {"supervised_platform", "social_discovery"}:
+                return "Protected or authenticated source requires a permitted supervised workflow."
+            return "Registered source has no operational discovery adapter."
+        if not self._health_allows_operation(settings):
+            return "Source health does not currently permit an automated check."
         return None
+
+    def _provider_is_operational(self, plugin: DiscoveryProvider) -> bool:
+        return bool(getattr(plugin, "operational_adapter", False))
+
+    def _health_allows_operation(self, settings: DiscoveryProviderSettings) -> bool:
+        status = str(settings.health_status or "unknown").strip().casefold()
+        return status not in {
+            "error",
+            "failed",
+            "unavailable",
+            "unhealthy",
+            "manual_required",
+            "manual_or_api_required",
+        }
 
     def _source_supports_mode(self, settings: DiscoveryProviderSettings, discovery_mode: str) -> bool:
         if discovery_mode == "All":

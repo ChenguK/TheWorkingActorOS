@@ -26,6 +26,7 @@ class PublicPlaybillJobsSource(DiscoverySourcePlugin):
     authentication_methods = ("None", "Public URL")
     default_poll_frequency_minutes = 720
     notes = "User-triggered public jobs page discovery."
+    operational_adapter = True
     listing_url = "https://playbill.com/jobs"
 
     def discover(self) -> list[dict]:

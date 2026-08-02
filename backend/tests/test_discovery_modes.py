@@ -192,11 +192,22 @@ class DiscoveryModeTests(unittest.TestCase):
         class FakePlugin:
             implementation_key = "indie_film_board"
             name = "Indie Film Casting Board"
+            operational_adapter = True
+            provider_kind = "public_casting_site"
 
-        coverage = DiscoveryAutomationService(FakeDb())._coverage_report("FilmTV", [FakePlugin()])
+        service = DiscoveryAutomationService(FakeDb())
+        service.registry = type("Registry", (), {"list": lambda _self: [FakePlugin()]})()
+        coverage = service._coverage_report(
+            "FilmTV", [FakePlugin()], [{"source": "Indie Film Casting Board", "total_found": 0}]
+        )
 
         self.assertEqual(coverage["approved_active_sources_checked"], 1)
         self.assertEqual(coverage["approved_mode_sources_available"], 1)
+        self.assertEqual(coverage["approved_source_records"], 1)
+        self.assertEqual(coverage["operational_mode_sources_available"], 1)
+        self.assertEqual(coverage["sources_attempted"], 1)
+        self.assertEqual(coverage["successful_source_checks"], 1)
+        self.assertEqual(coverage["source_candidates_returned"], 0)
         self.assertEqual(coverage["coverage_level"], "Very Limited")
         self.assertIn("did not search the full public web", coverage["scope_note"])
 
@@ -226,9 +237,169 @@ class DiscoveryModeTests(unittest.TestCase):
 
         self.assertEqual(coverage["approved_active_sources_checked"], 0)
         self.assertEqual(coverage["approved_mode_sources_available"], 0)
-        self.assertEqual(coverage["coverage_level"], "Very Limited")
+        self.assertEqual(coverage["coverage_level"], "No Coverage")
         self.assertEqual(coverage["eligible_sources_skipped"], 1)
         self.assertEqual(coverage["skipped_source_reasons"][0]["reason"], "Disabled or paused.")
+
+    def test_coverage_distinguishes_records_adapters_attempts_and_hits(self):
+        settings = [
+            DiscoveryProviderSettings(
+                provider_key="working_board",
+                display_name="Working Film Board",
+                category="Public Casting Sites",
+                source_type="public_breakdowns",
+                enabled=True,
+                health_status="available",
+                notes="Film and television casting notices.",
+            ),
+            DiscoveryProviderSettings(
+                provider_key="missing_adapter",
+                display_name="Approved Film Resource",
+                category="Public Casting Sites",
+                source_type="public_breakdowns",
+                enabled=True,
+                notes="Film casting notices.",
+            ),
+            DiscoveryProviderSettings(
+                provider_key="paused_board",
+                display_name="Paused Film Board",
+                category="Public Casting Sites",
+                source_type="public_breakdowns",
+                enabled=False,
+                notes="Film casting notices.",
+            ),
+            DiscoveryProviderSettings(
+                provider_key="theater_board",
+                display_name="Theater Auditions",
+                category="Public Casting Sites",
+                source_type="public_breakdowns",
+                enabled=True,
+                notes="Stage theater auditions.",
+            ),
+            DiscoveryProviderSettings(
+                provider_key="protected_platform",
+                display_name="Protected Casting Platform",
+                category="Professional Platforms",
+                source_type="platform",
+                enabled=True,
+                notes="Film casting platform.",
+            ),
+            DiscoveryProviderSettings(
+                provider_key="unhealthy_board",
+                display_name="Unhealthy Film Board",
+                category="Public Casting Sites",
+                source_type="public_breakdowns",
+                enabled=True,
+                health_status="unavailable",
+                notes="Film casting notices.",
+            ),
+        ]
+
+        class FakeDb:
+            def __init__(self):
+                self.calls = 0
+
+            def scalars(self, _statement):
+                self.calls += 1
+                return settings if self.calls == 1 else []
+
+        class Plugin:
+            def __init__(self, key, name, operational, kind="public_casting_site"):
+                self.implementation_key = key
+                self.name = name
+                self.operational_adapter = operational
+                self.provider_kind = kind
+
+        working = Plugin("working_board", "Working Film Board", True)
+        protected = Plugin(
+            "protected_platform", "Protected Casting Platform", False, "supervised_platform"
+        )
+        unhealthy = Plugin("unhealthy_board", "Unhealthy Film Board", True)
+        service = DiscoveryAutomationService(FakeDb())
+        service.registry = type(
+            "Registry", (), {"list": lambda _self: [working, protected, unhealthy]}
+        )()
+
+        coverage = service._coverage_report(
+            "FilmTV",
+            [working],
+            [{"source": working.name, "total_found": 2, "skipped": False}],
+        )
+
+        self.assertEqual(coverage["approved_source_records"], 5)
+        self.assertEqual(coverage["active_source_records"], 5)
+        self.assertEqual(coverage["operational_mode_sources_available"], 1)
+        self.assertEqual(coverage["sources_attempted"], 1)
+        self.assertEqual(coverage["successful_source_checks"], 1)
+        self.assertEqual(coverage["source_candidates_returned"], 2)
+        self.assertEqual(coverage["sources_returning_candidates"], 1)
+        reasons = {item["source"]: item["reason"] for item in coverage["skipped_source_reasons"]}
+        self.assertEqual(reasons["Paused Film Board"], "Disabled or paused.")
+        self.assertIn("Theater", reasons["Theater Auditions"])
+        self.assertEqual(
+            reasons["Protected Casting Platform"],
+            "Protected or authenticated source requires a permitted supervised workflow.",
+        )
+        self.assertEqual(
+            reasons["Approved Film Resource"], "No registered discovery adapter is available."
+        )
+        self.assertEqual(
+            reasons["Unhealthy Film Board"],
+            "Source health does not currently permit an automated check.",
+        )
+
+    def test_coverage_thresholds_use_only_operational_eligible_sources(self):
+        service = DiscoveryAutomationService(db=None)
+
+        self.assertEqual(service._coverage_level(0), "No Coverage")
+        self.assertEqual(service._coverage_level(1), "Very Limited")
+        self.assertEqual(service._coverage_level(2), "Very Limited")
+        self.assertEqual(service._coverage_level(3), "Limited")
+        self.assertEqual(service._coverage_level(5), "Limited")
+        self.assertEqual(service._coverage_level(6), "Good")
+        self.assertEqual(service._coverage_level(10), "Good")
+        self.assertEqual(service._coverage_level(11), "Broad")
+
+    def test_adapter_failure_is_attempted_but_not_reported_as_successful(self):
+        class Plugin:
+            implementation_key = "working_board"
+            name = "Working Film Board"
+            operational_adapter = True
+
+        settings = DiscoveryProviderSettings(
+            provider_key="working_board",
+            display_name="Working Film Board",
+            enabled=True,
+            notes="Film and television casting notices.",
+        )
+        service = DiscoveryAutomationService(db=None)
+        service.registry = type("Registry", (), {"list": lambda _self: [Plugin()]})()
+        service._sync_plugins = lambda: None
+        service._provider_settings = lambda _key: settings
+        service._research_source_allowed = lambda _settings: True
+        service._source_supports_mode = lambda _settings, _mode: True
+        service._health_allows_operation = lambda _settings: True
+        service._target_visible_limit = lambda _mode: None
+        service.run_source = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("fixture adapter failure")
+        )
+        service._run_public_web_search = lambda *_args, **_kwargs: {
+            "summary": {"candidate_reports": []},
+            "result": None,
+        }
+        service._coverage_report = lambda _mode, attempted, results: {
+            "sources_attempted": len(attempted),
+            "successful_source_checks": sum(not result["skipped"] for result in results),
+        }
+        service._discovery_report = lambda *_args: {}
+
+        result = service.run_all("FilmTV")
+
+        self.assertEqual(result["coverage"]["sources_attempted"], 1)
+        self.assertEqual(result["coverage"]["successful_source_checks"], 0)
+        self.assertEqual(
+            result["results"][0]["reason"], "Source check failed; no candidates were returned."
+        )
 
     def test_discovery_report_summarizes_public_web_candidates(self):
         service = DiscoveryAutomationService(db=None)

@@ -176,7 +176,7 @@ export function AutomationDashboard({
           : (publicWeb?.reason || "Public web search is not configured. Only approved sources were searched.")
       );
       setDiscoveryStatus(
-        `Checked ${coverage?.approved_active_sources_checked ?? result.sources_run} approved active ${label} breakdown source(s) using ${intentLabel}. Coverage is ${coverage?.coverage_level ?? "Unknown"}.${publicWebText} Found ${result.total_found}, visible eligible ${result.total_visible}${result.target_visible ? `/${result.target_visible}` : ""}, added ${result.opportunities_created}, travel exceptions ${result.total_travel_exceptions ?? 0}, needs review ${result.total_hidden}, discarded ${result.total_rejected}.${reasons ? ` Reasons: ${reasons}.` : ""}`
+        `${coverage?.approved_source_records ?? 0} approved source record(s); ${coverage?.operational_mode_sources_available ?? 0} operational ${label} source adapter(s); ${coverage?.sources_attempted ?? 0} attempted; ${coverage?.successful_source_checks ?? 0} checked successfully using ${intentLabel}. Operational coverage is ${coverage?.coverage_level ?? "Unknown"}.${publicWebText} Found ${result.total_found}, visible eligible ${result.total_visible}${result.target_visible ? `/${result.target_visible}` : ""}, added ${result.opportunities_created}, travel exceptions ${result.total_travel_exceptions ?? 0}, needs review ${result.total_hidden}, discarded ${result.total_rejected}.${reasons ? ` Reasons: ${reasons}.` : ""}`
       );
     }
   }
@@ -329,12 +329,16 @@ export function AutomationDashboard({
               {discoveryCoverage && (
                 <div className="mt-2 grid gap-1 text-xs text-slate-600">
                   <p>
-                    <span className="font-medium text-slate-800">Approved active sources checked:</span>{" "}
-                    {discoveryCoverage.approved_active_sources_checked}
+                    <span className="font-medium text-slate-800">Approved source records:</span>{" "}
+                    {discoveryCoverage.approved_source_records}
                   </p>
                   <p>
-                    <span className="font-medium text-slate-800">Available coverage:</span>{" "}
-                    {discoveryCoverage.approved_mode_sources_available} {discoveryCoverage.approved_mode_sources_label}; {discoveryCoverage.coverage_level}
+                    <span className="font-medium text-slate-800">Operational sources:</span>{" "}
+                    {discoveryCoverage.operational_mode_sources_available}; attempted {discoveryCoverage.sources_attempted}; checked successfully {discoveryCoverage.successful_source_checks}; returned candidates {discoveryCoverage.source_candidates_returned}
+                  </p>
+                  <p>
+                    <span className="font-medium text-slate-800">Operational coverage:</span>{" "}
+                    {discoveryCoverage.coverage_level}
                   </p>
                   <p>
                     <span className="font-medium text-slate-800">Sources awaiting approval:</span>{" "}

@@ -31,6 +31,16 @@ const discoveryResult: DiscoveryRunResult = {
   rejection_reasons_summary: {},
   sources_run: 1,
   coverage: {
+    approved_source_records: 3,
+    approved_source_record_names: ["Example", "Placeholder", "Paused"],
+    active_source_records: 2,
+    operational_mode_sources_available: 1,
+    operational_mode_source_names: ["Example"],
+    sources_attempted: 1,
+    source_names_attempted: ["Example"],
+    successful_source_checks: 1,
+    source_candidates_returned: 1,
+    sources_returning_candidates: 1,
     approved_active_sources_checked: 1,
     approved_active_source_names_checked: ["Example"],
     eligible_sources_skipped: 0,
@@ -135,6 +145,11 @@ describe("AutomationDashboard discovery state", () => {
     await user.click(screen.getByRole("button", { name: "Find Film/TV Breakdowns" }));
     await user.click(await screen.findByRole("button", { name: "View Discovery Report" }));
 
+    expect(screen.getByText(/3 approved source record\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText(/1 operational Film\/TV source adapter\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText(/1 attempted; 1 checked successfully/)).toBeInTheDocument();
+    expect(screen.getByText("Approved source records:")).toBeInTheDocument();
+    expect(screen.getByText("Operational sources:")).toBeInTheDocument();
     expect(screen.getByText("Parallel queries run")).toBeInTheDocument();
     expect(screen.getByText("87%")).toBeInTheDocument();
     expect(run).toHaveBeenCalledTimes(1);

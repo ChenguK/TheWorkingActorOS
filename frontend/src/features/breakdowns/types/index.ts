@@ -37,6 +37,16 @@ export type DiscoveryMode = "Theater" | "FilmTV" | "All";
 export type DiscoverySearchMode = "Match My Profile" | "Match My Archetypes" | "Find Stretch Roles" | "Search Specific Archetype";
 
 export type DiscoveryCoverage = {
+  approved_source_records: number;
+  approved_source_record_names: string[];
+  active_source_records: number;
+  operational_mode_sources_available: number;
+  operational_mode_source_names: string[];
+  sources_attempted: number;
+  source_names_attempted: string[];
+  successful_source_checks: number;
+  source_candidates_returned: number;
+  sources_returning_candidates: number;
   approved_active_sources_checked: number;
   approved_active_source_names_checked: string[];
   eligible_sources_skipped: number;
@@ -55,7 +65,7 @@ export type DiscoveryCoverage = {
   approved_mode_sources_available: number;
   approved_mode_sources_label: string;
   suggested_sources_awaiting_approval: number;
-  coverage_level: "Very Limited" | "Limited" | "Good" | "Broad" | string;
+  coverage_level: "No Coverage" | "Very Limited" | "Limited" | "Good" | "Broad" | string;
   scope_note: string;
 };
 

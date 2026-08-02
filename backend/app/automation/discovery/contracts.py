@@ -48,6 +48,7 @@ class DiscoveryProvider:
     authentication_methods: tuple[str, ...] = ("None",)
     default_poll_frequency_minutes: int = 1440
     notes: str | None = None
+    operational_adapter: bool = False
 
     def discover(self) -> list[dict]:
         raise NotImplementedError
