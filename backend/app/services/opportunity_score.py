@@ -8,7 +8,8 @@ import re
 from typing import Iterable
 
 from app.automation.discovery.classification import REJECTED_CLASSIFICATIONS
-from app.db.models import ActorProfile, Opportunity
+from app.db.models import ActorProfile, BreakdownRole, Opportunity
+from app.services.demographic_match_service import LANGUAGE_GROUPS
 
 
 OPPORTUNITY_SCORING_VERSION = 1
@@ -78,6 +79,56 @@ _ALLOWED_FEEDBACK_TYPES = {
     "Interesting Stretch",
     "Save For Later",
 }
+_FIT_PRECEDENCE = {
+    "strong fit": (0, "match.role_fit.strong", 18, "Strong Fit is the best parsed role fit (+18)."),
+    "possible fit": (
+        1,
+        "match.role_fit.possible",
+        10,
+        "Possible Fit is the best parsed role fit (+10).",
+    ),
+    "stretch fit": (
+        2,
+        "match.role_fit.stretch",
+        6,
+        "Stretch Fit is the best parsed role fit (+6).",
+    ),
+    "needs review": (3, None, 0, None),
+    "not fit": (4, "match.role_fit.none", -25, "Parsed roles exist, but none currently fit (-25)."),
+}
+_AMBIGUOUS_LANGUAGE_TERMS = ("preferred", "preference", "a plus", "helpful", "optional", "ideally")
+_UNION_ALIASES = {
+    "sag": "sag-aftra",
+    "aftra": "sag-aftra",
+    "sag aftra": "sag-aftra",
+    "sag-aftra": "sag-aftra",
+    "equity": "aea",
+    "aea": "aea",
+    "non union": "non-union",
+    "non-union": "non-union",
+    "union": "union",
+    "both": "union-and-non-union",
+    "union and non union": "union-and-non-union",
+    "union and non-union": "union-and-non-union",
+}
+_ROLE_TYPE_ALIASES = {
+    "co star": "co-star",
+    "costar": "co-star",
+    "guest-star": "guest star",
+    "series-regular": "series regular",
+    "voice over": "voiceover",
+}
+
+
+@dataclass(frozen=True)
+class ScoringContextMatch:
+    label: str
+    active: bool = True
+
+    def __post_init__(self) -> None:
+        _require_plain_text(self.label, field_name="match label", maximum=120)
+        if not isinstance(self.active, bool):
+            raise ValueError("match active state must be boolean")
 
 
 def _require_plain_text(value: str, *, field_name: str, maximum: int) -> None:
@@ -140,22 +191,28 @@ class ScoreFactor:
 
 @dataclass(frozen=True)
 class OpportunityScoringContext:
-    career_goal_matches: tuple[str, ...] = ()
-    dream_target_matches: tuple[str, ...] = ()
+    career_goal_matches: tuple[ScoringContextMatch, ...] = ()
+    dream_target_matches: tuple[ScoringContextMatch, ...] = ()
     watchlist_matches: tuple[str, ...] = ()
     requested_archetypes: tuple[str, ...] = ()
+    stretch_archetype_matches: tuple[str, ...] = ()
     submission_status: str | None = None
     feedback_type: str | None = None
     audition_travel_limit_hours: float | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
-            "career_goal_matches",
-            "dream_target_matches",
             "watchlist_matches",
             "requested_archetypes",
+            "stretch_archetype_matches",
         ):
             _require_string_tuple(getattr(self, field_name), field_name=field_name)
+        for field_name in ("career_goal_matches", "dream_target_matches"):
+            values = getattr(self, field_name)
+            if not isinstance(values, tuple) or any(
+                not isinstance(value, ScoringContextMatch) for value in values
+            ):
+                raise ValueError(f"{field_name} must contain only ScoringContextMatch values")
         if self.submission_status is not None:
             _require_plain_text(
                 self.submission_status,
@@ -322,10 +379,97 @@ def score_opportunity(
     if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of must be timezone-aware")
     override = _hard_override_reason(opportunity)
+    factors = () if override else _match_and_career_factors(opportunity, actor, context)
     return build_opportunity_score(
         opportunity_id=str(opportunity.id),
+        factors=factors,
         hard_override_reason=override,
     )
+
+
+def _match_and_career_factors(
+    opportunity: Opportunity,
+    actor: ActorProfile,
+    context: OpportunityScoringContext,
+) -> tuple[ScoreFactor, ...]:
+    factors: list[ScoreFactor] = []
+    best_role, fit_factor = _best_role_fit(opportunity)
+    if fit_factor:
+        factors.append(fit_factor)
+    if opportunity.demographic_match_status == "Match":
+        factors.append(
+            ScoreFactor(
+                id="match.demographic.confirmed",
+                category=ScoreCategory.MATCH_QUALITY,
+                points=8,
+                explanation="Existing demographic matching confirms actor and role overlap (+8).",
+                priority=20,
+            )
+        )
+    if _has_preferred_role_type(opportunity, best_role, actor):
+        factors.append(
+            ScoreFactor(
+                id="match.role_type.preferred",
+                category=ScoreCategory.MATCH_QUALITY,
+                points=4,
+                explanation="The structured role type is explicitly included in actor preferences (+4).",
+                priority=30,
+            )
+        )
+    language_factor = _language_factor(best_role, actor)
+    if language_factor:
+        factors.append(language_factor)
+    if _has_explicit_union_compatibility(opportunity, best_role, actor):
+        factors.append(
+            ScoreFactor(
+                id="match.union.compatible",
+                category=ScoreCategory.MATCH_QUALITY,
+                points=3,
+                explanation="Stored actor and role union states are explicitly compatible (+3).",
+                priority=50,
+            )
+        )
+
+    active_goals = _active_match_labels(context.career_goal_matches)
+    if active_goals:
+        factors.append(
+            ScoreFactor(
+                id="career.goal.active_match",
+                category=ScoreCategory.CAREER_VALUE,
+                points=8,
+                explanation=f"Active career goal explicitly matches: {active_goals[0]} (+8).",
+                priority=100,
+            )
+        )
+    active_targets = _active_match_labels(context.dream_target_matches)
+    if active_targets:
+        factors.append(
+            ScoreFactor(
+                id="career.dream_target.match",
+                category=ScoreCategory.CAREER_VALUE,
+                points=7,
+                explanation=f"Dream target explicitly matches: {active_targets[0]} (+7).",
+                priority=110,
+            )
+        )
+    if _is_stretch_fit(best_role) and (
+        active_goals or _normalized_strings(context.stretch_archetype_matches)
+    ):
+        support = (
+            _normalized_strings(context.stretch_archetype_matches)[0]
+            if context.stretch_archetype_matches
+            else active_goals[0]
+        )
+        factors.append(
+            ScoreFactor(
+                id="career.stretch.strategic",
+                category=ScoreCategory.CAREER_VALUE,
+                points=5,
+                explanation=f"Stretch Fit has explicit strategic support: {support} (+5).",
+                priority=130,
+            )
+        )
+    return tuple(factors)
 
 
 def _ordered_factors(factors: Iterable[ScoreFactor]) -> tuple[ScoreFactor, ...]:
@@ -348,6 +492,164 @@ def _ordered_factors(factors: Iterable[ScoreFactor]) -> tuple[ScoreFactor, ...]:
             ),
         )
     )
+
+
+def _best_role_fit(opportunity: Opportunity) -> tuple[BreakdownRole | None, ScoreFactor | None]:
+    candidates = []
+    has_unknown_fit = False
+    for role in opportunity.breakdown_roles:
+        normalized_fit = _normalize_text(role.fit_status)
+        fit = _FIT_PRECEDENCE.get(normalized_fit)
+        if fit is None:
+            has_unknown_fit = True
+            continue
+        candidates.append((fit[0], _role_stable_key(role), role, fit))
+    if not candidates:
+        return None, None
+    _, _, selected_role, selected_fit = min(candidates, key=lambda value: (value[0], value[1]))
+    _, factor_id, points, explanation = selected_fit
+    if factor_id == "match.role_fit.none" and has_unknown_fit:
+        return selected_role, None
+    if factor_id is None:
+        return selected_role, None
+    return selected_role, ScoreFactor(
+        id=factor_id,
+        category=ScoreCategory.MATCH_QUALITY,
+        points=points,
+        explanation=explanation,
+        priority=10,
+    )
+
+
+def _role_stable_key(role: BreakdownRole) -> tuple[str, ...]:
+    return tuple(
+        _normalize_text(value)
+        for value in (
+            role.role_name,
+            role.role_type,
+            role.billing,
+            role.billing_or_role_type,
+            role.language_requirements,
+            role.union_status,
+        )
+    )
+
+
+def _has_preferred_role_type(
+    opportunity: Opportunity,
+    best_role: BreakdownRole | None,
+    actor: ActorProfile,
+) -> bool:
+    preferences = {
+        _normalize_role_type(value)
+        for value in actor.included_role_types or []
+        if str(value).strip()
+    }
+    if not preferences:
+        return False
+    candidates = [opportunity.role_type]
+    if best_role:
+        candidates.extend((best_role.role_type, best_role.billing, best_role.billing_or_role_type))
+    return bool(
+        preferences.intersection(_normalize_role_type(value) for value in candidates if value)
+    )
+
+
+def _language_factor(best_role: BreakdownRole | None, actor: ActorProfile) -> ScoreFactor | None:
+    if best_role is None or not best_role.language_requirements:
+        return None
+    requirement = _normalize_text(best_role.language_requirements)
+    if not requirement or any(term in requirement for term in _AMBIGUOUS_LANGUAGE_TERMS):
+        return None
+    required = _recognized_languages(requirement)
+    if not required:
+        return None
+    actor_languages = {_canonical_language(value) for value in actor.languages or []}
+    if required.issubset(actor_languages):
+        return ScoreFactor(
+            id="match.language.required_met",
+            category=ScoreCategory.MATCH_QUALITY,
+            points=4,
+            explanation="All explicit required languages are present in the saved actor profile (+4).",
+            priority=40,
+        )
+    return ScoreFactor(
+        id="match.language.required_missing",
+        category=ScoreCategory.MATCH_QUALITY,
+        points=-8,
+        explanation="At least one explicit required language is absent from the saved actor profile (-8).",
+        priority=40,
+    )
+
+
+def _recognized_languages(requirement: str) -> set[str]:
+    recognized = set()
+    for group in LANGUAGE_GROUPS:
+        terms = sorted((str(term) for term in group.terms), key=lambda value: (-len(value), value))
+        if any(
+            re.search(rf"\b{re.escape(_normalize_text(term))}\b", requirement) for term in terms
+        ):
+            recognized.add(_canonical_language(group.label))
+    return recognized
+
+
+def _canonical_language(value: str) -> str:
+    normalized = _normalize_text(value)
+    for group in LANGUAGE_GROUPS:
+        labels = {_normalize_text(group.label), *(_normalize_text(term) for term in group.terms)}
+        if normalized in labels:
+            return _normalize_text(group.label)
+    return normalized
+
+
+def _has_explicit_union_compatibility(
+    opportunity: Opportunity,
+    best_role: BreakdownRole | None,
+    actor: ActorProfile,
+) -> bool:
+    role_union = _canonical_union(
+        best_role.union_status if best_role and best_role.union_status else opportunity.union
+    )
+    actor_unions = {
+        union
+        for union in (_canonical_union(actor.union_status), _canonical_union(actor.sag_status))
+        if union is not None
+    }
+    if role_union is None or not actor_unions:
+        return False
+    if "union-and-non-union" in actor_unions:
+        return role_union in {"sag-aftra", "aea", "union", "non-union"}
+    return role_union in actor_unions
+
+
+def _canonical_union(value: str | None) -> str | None:
+    normalized = _normalize_text(value)
+    if not normalized or normalized in {"unknown", "uncertain", "n/a", "na"}:
+        return None
+    return _UNION_ALIASES.get(normalized)
+
+
+def _active_match_labels(matches: tuple[ScoringContextMatch, ...]) -> tuple[str, ...]:
+    labels = {" ".join(match.label.split()) for match in matches if match.active}
+    return tuple(sorted(labels, key=lambda value: (_normalize_text(value), value)))
+
+
+def _normalized_strings(values: tuple[str, ...]) -> tuple[str, ...]:
+    normalized = {" ".join(value.split()) for value in values}
+    return tuple(sorted(normalized, key=lambda value: (_normalize_text(value), value)))
+
+
+def _is_stretch_fit(role: BreakdownRole | None) -> bool:
+    return role is not None and _normalize_text(role.fit_status) == "stretch fit"
+
+
+def _normalize_role_type(value: str) -> str:
+    normalized = _normalize_text(value).replace("–", "-")
+    return _ROLE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_text(value) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
 def _category_score(

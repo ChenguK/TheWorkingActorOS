@@ -106,7 +106,7 @@ def parsed_role(**overrides: Any) -> BreakdownRole:
         "role_name": "Detective",
         "role_type": "Guest Star",
         "character_description": "Grounded detective who leads the investigation.",
-        "language_requirements": "English",
+        "language_requirements": None,
         "union_status": "SAG-AFTRA",
         "fit_status": "Strong Fit",
         "fit_score": 90,

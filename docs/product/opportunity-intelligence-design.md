@@ -34,19 +34,18 @@ The raw score begins at a documented baseline of **50**. Category contributions 
 
 | Priority | Factor ID | Category | Condition | Points |
 | ---: | --- | --- | --- | ---: |
-| 10 | `match.role.strong` | Match quality | Best parsed role is Strong Fit | +18 |
-| 11 | `match.role.possible` | Match quality | Best parsed role is Possible Fit | +10 |
-| 12 | `match.role.stretch` | Match quality | Best parsed role is Stretch Fit | +6 |
-| 13 | `match.role.not_fit` | Match quality | Parsed roles exist and none fits | -25 |
+| 10 | `match.role_fit.strong` | Match quality | Best parsed role is Strong Fit | +18 |
+| 10 | `match.role_fit.possible` | Match quality | Best parsed role is Possible Fit | +10 |
+| 10 | `match.role_fit.stretch` | Match quality | Best parsed role is Stretch Fit | +6 |
+| 10 | `match.role_fit.none` | Match quality | Parsed roles exist and none fits | -25 |
 | 20 | `match.demographic.confirmed` | Match quality | Existing matcher says Match | +8 |
 | 21 | `match.demographic.review` | Match quality | Existing matcher requires review | 0 |
 | 30 | `match.role_type.preferred` | Match quality | Role type is explicitly included | +4 |
-| 40 | `match.language.confirmed` | Match quality | Explicit role language overlaps saved actor languages | +4 |
-| 41 | `match.language.mismatch` | Match quality | Explicit required language has no overlap | -8 |
+| 40 | `match.language.required_met` | Match quality | All explicit required role languages are saved actor languages | +4 |
+| 40 | `match.language.required_missing` | Match quality | At least one explicit required language is absent | -8 |
 | 50 | `match.union.compatible` | Match quality | Stored union facts explicitly establish compatibility | +3 |
-| 100 | `career.goal.match` | Career value | Best active goal matches project, market, archetype, or casting office | +8 |
+| 100 | `career.goal.active_match` | Career value | Best active goal matches project, market, archetype, or casting office | +8 |
 | 110 | `career.dream_target.match` | Career value | Best active dream target matches | +7 |
-| 120 | `career.watchlist.high` | Career value | Enabled High-priority watch-list term matches | +5 |
 | 130 | `career.stretch.strategic` | Career value | Stretch role matches an explicit stretch archetype or active goal | +5 |
 | 200 | `practicality.self_tape` | Practicality | Self-Tape or Virtual audition | +8 |
 | 210 | `practicality.local` | Practicality | In-person travel is within the saved threshold | +4 |
@@ -77,6 +76,8 @@ The raw score begins at a documented baseline of **50**. Category contributions 
 | 412 | `interest.feedback.negative` | Actor interest | Latest applicable feedback is Not My Type | -8 |
 
 Category caps prevent a dense record from dominating through repeated evidence: Match quality -35..+30; Career value -10..+20; Practicality -25..+20; Confidence -20..+15; Actor interest -20..+15. Repeated goals, roles, languages, archetypes, or watch-list terms select the single highest contribution for their factor group; they do not accumulate.
+
+Task 3 uses parsed-role `fit_status`, Opportunity demographic state, structured actor role preferences and languages, normalized role/actor union fields, and immutable pre-resolved goal/target matches. Persisted `DreamRoleTarget` has no active/inactive field, so stored targets are implicitly active; an upstream consumer must omit a target it considers inactive. Watch-list points are deferred to Actor Interest because current watch lists represent attention and preference, not an independent career-strategy signal.
 
 The initial critical-field set is fixed and versioned with the scorer: project, role, description, project type/category, audition type, location, and a submission/audition deadline. A field is assessed only by presence, never by invented content.
 
