@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import logging
 import re
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -11,6 +10,12 @@ from urllib.parse import urlparse
 
 from app.automation.discovery.classification import classify_breakdown_text
 from app.automation.discovery.contracts import NormalizedOpportunity
+from app.automation.discovery.public_content_fetch import (
+    PUBLIC_CONTENT_MAX_VISIBLE_TEXT_LENGTH,
+    PublicContentFetchOutcome,
+    PublicContentFetchResult,
+    PublicContentFetcher,
+)
 from app.core.config import get_settings
 from app.db.models import ActorProfile
 from app.services.breakdown_details_service import BreakdownDetailsService
@@ -94,11 +99,15 @@ class PublicWebSearchResult:
 
 class PublicWebBreakdownSearch:
     def __init__(
-        self, actor: ActorProfile | None = None, parallel_client: Any | None = None
+        self,
+        actor: ActorProfile | None = None,
+        parallel_client: Any | None = None,
+        content_fetcher: PublicContentFetcher | None = None,
     ) -> None:
         self.actor = actor
         self.settings = get_settings()
         self._parallel_client = parallel_client
+        self._content_fetcher = content_fetcher or PublicContentFetcher()
 
     def configured(self) -> bool:
         return (
@@ -157,13 +166,15 @@ class PublicWebBreakdownSearch:
                 "rejection_reason": "Unknown",
                 "provider_evidence": candidate.as_report_dict(),
             }
-            page_text = self._fetch_visible_text(url)
-            if not page_text:
+            fetch_result = self._fetch_visible_text(url)
+            if not fetch_result.succeeded:
                 rejected += 1
                 rejection_reasons["fetch_failed"] += 1
-                report["rejection_reason"] = "Fetch failed"
+                report["fetch_outcome"] = fetch_result.outcome.value
+                report["rejection_reason"] = fetch_result.message
                 candidate_reports.append(report)
                 continue
+            page_text = fetch_result.text or ""
             item = self._normalize_candidate(url, page_text)
             if item:
                 normalized.append(item)
@@ -591,28 +602,21 @@ class PublicWebBreakdownSearch:
         if str(self.settings.environment or "").lower() in {"development", "dev", "local"}:
             logger.info("%s: %s", message, payload)
 
-    def _fetch_visible_text(self, url: str) -> str | None:
-        try:
-            request = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "WorkingActorOS/0.1 user-triggered public breakdown discovery",
-                    "Accept": "text/html,application/xhtml+xml,text/plain",
-                },
+    def _fetch_visible_text(self, url: str) -> PublicContentFetchResult:
+        fetched = self._content_fetcher.fetch(url)
+        if not fetched.succeeded:
+            return fetched
+        text = self._clean_visible_page(fetched.text or "")[:PUBLIC_CONTENT_MAX_VISIBLE_TEXT_LENGTH]
+        if len(text.split()) < 25:
+            return PublicContentFetchResult(
+                outcome=PublicContentFetchOutcome.EMPTY_USABLE_CONTENT,
+                message="Candidate contained no usable public text.",
             )
-            with urllib.request.urlopen(request, timeout=12) as response:
-                content_type = response.headers.get("content-type", "")
-                if (
-                    content_type
-                    and "text/html" not in content_type
-                    and "text/plain" not in content_type
-                ):
-                    return None
-                body = response.read(500_000).decode("utf-8", errors="ignore")
-        except Exception:
-            return None
-        text = self._clean_visible_page(body)
-        return text[:12000] if len(text.split()) >= 25 else None
+        return PublicContentFetchResult(
+            outcome=PublicContentFetchOutcome.SUCCESS,
+            text=text,
+            message="Public page fetched.",
+        )
 
     def _clean_visible_page(self, html_text: str) -> str:
         text = re.sub(r"(?is)<(script|style|noscript|svg).*?</\1>", " ", html_text)

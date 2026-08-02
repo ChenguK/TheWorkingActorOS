@@ -3,6 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.automation.discovery.public_web_search import PublicWebBreakdownSearch
+from app.automation.discovery.public_content_fetch import (
+    PublicContentFetchOutcome,
+    PublicContentFetchResult,
+)
 from app.automation.discovery.public_web_search import (
     PARALLEL_ADVANCED_SETTINGS,
     PUBLIC_WEB_MAX_ARCHETYPE_TERMS,
@@ -407,7 +411,10 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
     def test_parallel_call_and_result_budgets_are_unchanged(self):
         client = FakeParallelClient()
         service = self.configured_service(client=client)
-        service._fetch_visible_text = lambda _url: None
+        service._fetch_visible_text = lambda _url: PublicContentFetchResult(
+            PublicContentFetchOutcome.HTTP_FAILURE,
+            message="Candidate returned an unsuccessful HTTP response.",
+        )
 
         service.search("FilmTV")
 
@@ -663,12 +670,15 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
     def test_search_returns_normalized_breakdown_from_verified_page(self):
         service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
         service.configured = lambda: True
-        service._fetch_visible_text = lambda _url: (
-            "Project: River City Feature\n"
-            "Role: Principal Woman\n"
-            "SAG-AFTRA feature film casting call seeking actors. "
-            "Black woman 25-40. Self-tape submission instructions. "
-            "Lead, supporting, and principal talent considered."
+        service._fetch_visible_text = lambda _url: PublicContentFetchResult(
+            PublicContentFetchOutcome.SUCCESS,
+            text=(
+                "Project: River City Feature\n"
+                "Role: Principal Woman\n"
+                "SAG-AFTRA feature film casting call seeking actors. "
+                "Black woman 25-40. Self-tape submission instructions. "
+                "Lead, supporting, and principal talent considered."
+            ),
         )
 
         result = service.search("FilmTV")
@@ -729,11 +739,14 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
 
         service = PublicWebBreakdownSearch(FakeActor(), parallel_client=ObjectParallelClient())
         service.configured = lambda: True
-        service._fetch_visible_text = lambda _url: (
-            "Project: Current TV Drama\n"
-            "Role: Co-Star Woman\n"
-            "SAG-AFTRA television casting call seeking Black woman 25-40. "
-            "Self tape instructions included."
+        service._fetch_visible_text = lambda _url: PublicContentFetchResult(
+            PublicContentFetchOutcome.SUCCESS,
+            text=(
+                "Project: Current TV Drama\n"
+                "Role: Co-Star Woman\n"
+                "SAG-AFTRA television casting call seeking Black woman 25-40. "
+                "Self tape instructions included."
+            ),
         )
 
         result = service.search("FilmTV")
