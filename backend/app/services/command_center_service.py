@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -13,21 +14,36 @@ from app.db.models import (
     MaterialGapAlert,
     Opportunity,
     OutcomeNudge,
+    RecommendationFeedback,
     SelfTapeWorkflow,
     SourceResearchItem,
     Submission,
     SubmissionAutomationQueue,
+    TravelPreference,
 )
 from app.agents.executive_agent import ExecutiveAgent
 from app.core.constants import CALLBACK_STATUSES, OPEN_SUBMISSION_STATUSES
 from app.repositories.opportunity import MAIN_BREAKDOWN_CLASSIFICATIONS
 from app.services.opportunity_intelligence_service import OpportunityIntelligenceService
+from app.services.opportunity_score import (
+    FeedbackScoringEntry,
+    OpportunityScoringContext,
+    WatchListScoringMatch,
+    build_opportunity_ranking_entry,
+    rank_opportunity_entries,
+)
 from app.services.operations_service import OperationsService
 
 
 POSITIVE_OUTCOMES = set(CALLBACK_STATUSES)
 COMMAND_CENTER_DISPLAY_LIMIT = 8
 COMMAND_CENTER_CANDIDATE_LIMIT = 100
+SUPPORTED_RECOMMENDATION_FEEDBACK = (
+    "This Fits Me",
+    "Not My Type",
+    "Interesting Stretch",
+    "Save For Later",
+)
 
 
 def real_breakdown_filter():
@@ -63,12 +79,8 @@ class CommandCenterService:
             raise ValueError("since_at must be timezone-aware")
         now = as_of
         soon = now + timedelta(days=14)
-        visible_opportunities = list(
-            self.db.scalars(
-                self._opportunity_candidate_statement()
-                .order_by(Opportunity.urgency_score.desc(), Opportunity.quality_score.desc())
-                .limit(COMMAND_CENTER_DISPLAY_LIMIT)
-            )
+        visible_opportunities = self._ranked_opportunities(
+            self.read_opportunity_candidates(), actor, as_of=now
         )
         queued = list(
             self.db.scalars(
@@ -143,6 +155,154 @@ class CommandCenterService:
                 .limit(COMMAND_CENTER_CANDIDATE_LIMIT)
             )
         )
+
+    def _ranked_opportunities(
+        self,
+        candidates: list[Opportunity],
+        actor: ActorProfile | None,
+        *,
+        as_of: datetime,
+    ) -> list[Opportunity]:
+        if not candidates:
+            return []
+        if actor is None:
+            return sorted(
+                candidates,
+                key=lambda item: (-item.urgency_score, -item.quality_score),
+            )[:COMMAND_CENTER_DISPLAY_LIMIT]
+
+        contexts = self._read_scoring_contexts(candidates, actor)
+        intelligence = OpportunityIntelligenceService(self.db)
+        entries = []
+        candidates_by_id = {}
+        for candidate in candidates:
+            score = intelligence.score(
+                candidate,
+                actor,
+                contexts[candidate.id],
+                as_of=as_of,
+            )
+            entries.append(
+                build_opportunity_ranking_entry(candidate, score, as_of=as_of)
+            )
+            candidates_by_id[candidate.id] = candidate
+        ranked = rank_opportunity_entries(entries)
+        return [
+            candidates_by_id[entry.opportunity_id]
+            for entry in ranked[:COMMAND_CENTER_DISPLAY_LIMIT]
+        ]
+
+    def _read_scoring_contexts(
+        self,
+        candidates: list[Opportunity],
+        actor: ActorProfile,
+    ) -> dict[UUID, OpportunityScoringContext]:
+        candidate_ids = [candidate.id for candidate in candidates]
+        feedback_rank = (
+            select(
+                RecommendationFeedback.id.label("feedback_id"),
+                func.row_number()
+                .over(
+                    partition_by=RecommendationFeedback.opportunity_id,
+                    order_by=(
+                        RecommendationFeedback.created_at.desc(),
+                        RecommendationFeedback.id.asc(),
+                    ),
+                )
+                .label("feedback_rank"),
+            )
+            .where(RecommendationFeedback.actor_profile_id == actor.id)
+            .where(RecommendationFeedback.opportunity_id.in_(candidate_ids))
+            .where(
+                RecommendationFeedback.feedback_type.in_(
+                    SUPPORTED_RECOMMENDATION_FEEDBACK
+                )
+            )
+            .subquery()
+        )
+        feedback_rows = self.db.scalars(
+            select(RecommendationFeedback)
+            .join(
+                feedback_rank,
+                feedback_rank.c.feedback_id == RecommendationFeedback.id,
+            )
+            .where(feedback_rank.c.feedback_rank == 1)
+        ).all()
+        feedback_by_opportunity = {
+            feedback.opportunity_id: FeedbackScoringEntry(
+                key=str(feedback.id),
+                feedback_type=feedback.feedback_type,
+                created_at=self._aware_timestamp(feedback.created_at),
+            )
+            for feedback in feedback_rows
+        }
+        travel = self.db.scalars(
+            select(TravelPreference)
+            .where(TravelPreference.actor_profile_id == actor.id)
+            .order_by(TravelPreference.created_at.desc(), TravelPreference.id.asc())
+            .limit(1)
+        ).first()
+        travel_limit = travel.audition_max_drive_time / 60 if travel else None
+        return {
+            candidate.id: self._build_scoring_context(
+                candidate,
+                feedback=feedback_by_opportunity.get(candidate.id),
+                audition_travel_limit_hours=travel_limit,
+            )
+            for candidate in candidates
+        }
+
+    @classmethod
+    def _build_scoring_context(
+        cls,
+        opportunity: Opportunity,
+        *,
+        feedback: FeedbackScoringEntry | None = None,
+        audition_travel_limit_hours: float | None = None,
+    ) -> OpportunityScoringContext:
+        watchlist_matches = []
+        for value in opportunity.watchlist_match_names or []:
+            if not isinstance(value, dict):
+                continue
+            priority = value.get("priority")
+            key = value.get("id") or value.get("title")
+            if priority not in {"High", "Medium", "Low"} or not isinstance(
+                key, str
+            ):
+                continue
+            key = key.strip()
+            if not key or len(key) > 120:
+                continue
+            watchlist_matches.append(
+                WatchListScoringMatch(key=key, priority=priority)
+            )
+        return OpportunityScoringContext(
+            watchlist_matches=tuple(watchlist_matches),
+            submission_status=cls._latest_submission_status(opportunity.submissions),
+            feedback_entries=(feedback,) if feedback else (),
+            audition_travel_limit_hours=audition_travel_limit_hours,
+        )
+
+    @classmethod
+    def _latest_submission_status(cls, submissions: list[Submission]) -> str | None:
+        if not submissions:
+            return None
+        selected = min(
+            submissions,
+            key=lambda submission: (
+                -cls._aware_timestamp(
+                    submission.submitted_at
+                    or submission.updated_at
+                    or submission.created_at
+                ).timestamp(),
+                str(submission.id),
+            ),
+        )
+        return selected.current_status
+
+    @staticmethod
+    def _aware_timestamp(value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
     @staticmethod
     def _opportunity_candidate_statement():

@@ -164,6 +164,12 @@ def test_read_boundaries_require_timezone_aware_as_of():
     naive = datetime(2027, 1, 15, 15, 0)
 
     with pytest.raises(ValueError, match="timezone-aware"):
+        CommandCenterService(MagicMock()).read_snapshot(
+            actor=None,
+            as_of=naive,
+            since_at=AS_OF,
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
         ExecutiveAgent(MagicMock()).read_top_priorities(as_of=naive)
     with pytest.raises(ValueError, match="timezone-aware"):
         OperationsService(MagicMock()).read_today_platform_check_ins(as_of=naive)
