@@ -22,6 +22,7 @@ from app.services.opportunity_score import (
     ScoringContextMatch,
     ScoreCategory,
     ScoreFactor,
+    WatchListScoringMatch,
     build_opportunity_score,
 )
 from tests.intelligence_builders import (
@@ -116,7 +117,7 @@ def test_context_is_immutable_and_rejects_malformed_values():
     context = OpportunityScoringContext(
         career_goal_matches=(ScoringContextMatch("Television"),),
         dream_target_matches=(ScoringContextMatch("Test Procedural"),),
-        watchlist_matches=("Detective",),
+        watchlist_matches=(WatchListScoringMatch("Detective", "High"),),
         requested_archetypes=("Authority Figure",),
         submission_status="Passed",
         feedback_type="Interesting Stretch",

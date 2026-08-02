@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import math
 import re
@@ -79,6 +79,33 @@ _ALLOWED_FEEDBACK_TYPES = {
     "Interesting Stretch",
     "Save For Later",
 }
+_ALLOWED_SUBMISSION_STATUSES = {
+    "Submitted",
+    "Requested",
+    "Self-Tape Callback",
+    "In-Person Callback",
+    "Pinned",
+    "Booked",
+    "Passed",
+    "No Response",
+}
+_WATCHLIST_POINTS = {"High": 8, "Medium": 5, "Low": 3}
+_WATCHLIST_PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+_FEEDBACK_POINTS = {
+    "This Fits Me": ("interest.feedback.fits_me", 6, "Latest feedback says This Fits Me (+6)."),
+    "Interesting Stretch": (
+        "interest.feedback.interesting_stretch",
+        4,
+        "Latest feedback says Interesting Stretch (+4).",
+    ),
+    "Save For Later": (
+        "interest.feedback.save_later",
+        2,
+        "Latest feedback says Save For Later (+2).",
+    ),
+    "Not My Type": ("interest.feedback.not_my_type", -8, "Latest feedback says Not My Type (-8)."),
+}
+_MISSING_SENTINELS = {"unknown", "see source", "n/a", "na", "none", "tbd", "not provided"}
 _FIT_PRECEDENCE = {
     "strong fit": (0, "match.role_fit.strong", 18, "Strong Fit is the best parsed role fit (+18)."),
     "possible fit": (
@@ -129,6 +156,37 @@ class ScoringContextMatch:
         _require_plain_text(self.label, field_name="match label", maximum=120)
         if not isinstance(self.active, bool):
             raise ValueError("match active state must be boolean")
+
+
+@dataclass(frozen=True)
+class WatchListScoringMatch:
+    key: str
+    priority: str
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        _require_plain_text(self.key, field_name="watch-list key", maximum=120)
+        if self.priority not in _WATCHLIST_POINTS:
+            raise ValueError("watch-list priority is unsupported")
+        if not isinstance(self.enabled, bool):
+            raise ValueError("watch-list enabled state must be boolean")
+
+
+@dataclass(frozen=True)
+class FeedbackScoringEntry:
+    key: str
+    feedback_type: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_plain_text(self.key, field_name="feedback key", maximum=120)
+        _require_plain_text(self.feedback_type, field_name="feedback type", maximum=80)
+        if (
+            not isinstance(self.created_at, datetime)
+            or self.created_at.tzinfo is None
+            or self.created_at.utcoffset() is None
+        ):
+            raise ValueError("feedback created_at must be timezone-aware")
 
 
 def _require_plain_text(value: str, *, field_name: str, maximum: int) -> None:
@@ -193,16 +251,16 @@ class ScoreFactor:
 class OpportunityScoringContext:
     career_goal_matches: tuple[ScoringContextMatch, ...] = ()
     dream_target_matches: tuple[ScoringContextMatch, ...] = ()
-    watchlist_matches: tuple[str, ...] = ()
+    watchlist_matches: tuple[WatchListScoringMatch, ...] = ()
     requested_archetypes: tuple[str, ...] = ()
     stretch_archetype_matches: tuple[str, ...] = ()
     submission_status: str | None = None
     feedback_type: str | None = None
+    feedback_entries: tuple[FeedbackScoringEntry, ...] = ()
     audition_travel_limit_hours: float | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
-            "watchlist_matches",
             "requested_archetypes",
             "stretch_archetype_matches",
         ):
@@ -213,12 +271,22 @@ class OpportunityScoringContext:
                 not isinstance(value, ScoringContextMatch) for value in values
             ):
                 raise ValueError(f"{field_name} must contain only ScoringContextMatch values")
+        if not isinstance(self.watchlist_matches, tuple) or any(
+            not isinstance(value, WatchListScoringMatch) for value in self.watchlist_matches
+        ):
+            raise ValueError("watchlist_matches must contain only WatchListScoringMatch values")
+        if not isinstance(self.feedback_entries, tuple) or any(
+            not isinstance(value, FeedbackScoringEntry) for value in self.feedback_entries
+        ):
+            raise ValueError("feedback_entries must contain only FeedbackScoringEntry values")
         if self.submission_status is not None:
             _require_plain_text(
                 self.submission_status,
                 field_name="submission_status",
                 maximum=80,
             )
+            if self.submission_status not in _ALLOWED_SUBMISSION_STATUSES:
+                raise ValueError("submission_status is unsupported")
         if self.feedback_type is not None and self.feedback_type not in _ALLOWED_FEEDBACK_TYPES:
             raise ValueError("feedback_type is unsupported")
         limit = self.audition_travel_limit_hours
@@ -341,6 +409,9 @@ def build_opportunity_score(
 
     total = OPPORTUNITY_SCORE_BASELINE + sum(category.capped_subtotal for category in categories)
     overall_score = max(0, min(100, total))
+    confidence_category = next(
+        category for category in categories if category.category is ScoreCategory.CONFIDENCE
+    )
     return OpportunityScore(
         opportunity_id=opportunity_id,
         scoring_version=OPPORTUNITY_SCORING_VERSION,
@@ -351,16 +422,34 @@ def build_opportunity_score(
         negative_contributors=negative,
         hard_override=False,
         hard_override_reason=None,
-        confidence=ScoreConfidence(
-            level="Not Scored",
-            summary="Detailed confidence factors are not implemented in the version 1 scoring foundation.",
-        ),
+        confidence=_score_confidence(confidence_category),
         explanation=ScoreExplanation(
             summary=(
                 "The score equals the baseline plus bounded category contributions."
                 if ordered_factors
                 else "No detailed scoring factors apply yet; the score remains at the baseline."
             )
+        ),
+    )
+
+
+def _score_confidence(category: CategoryScore) -> ScoreConfidence:
+    if not category.factors:
+        return ScoreConfidence(
+            level="Not Scored",
+            summary="Detailed confidence factors are not implemented in the version 1 scoring foundation.",
+        )
+    if category.capped_subtotal >= 10:
+        level = "High"
+    elif category.capped_subtotal >= 0:
+        level = "Medium"
+    else:
+        level = "Low"
+    return ScoreConfidence(
+        level=level,
+        summary=(
+            f"{level} confidence: {len(category.factors)} bounded confidence factors "
+            f"contribute {category.capped_subtotal:+d} points."
         ),
     )
 
@@ -379,7 +468,16 @@ def score_opportunity(
     if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of must be timezone-aware")
     override = _hard_override_reason(opportunity)
-    factors = () if override else _match_and_career_factors(opportunity, actor, context)
+    factors = (
+        ()
+        if override
+        else (
+            *_match_and_career_factors(opportunity, actor, context),
+            *_practicality_factors(opportunity, context, as_of),
+            *_confidence_factors(opportunity),
+            *_actor_interest_factors(context),
+        )
+    )
     return build_opportunity_score(
         opportunity_id=str(opportunity.id),
         factors=factors,
@@ -470,6 +568,353 @@ def _match_and_career_factors(
             )
         )
     return tuple(factors)
+
+
+def _practicality_factors(
+    opportunity: Opportunity,
+    context: OpportunityScoringContext,
+    as_of: datetime,
+) -> tuple[ScoreFactor, ...]:
+    factors: list[ScoreFactor] = []
+    modality = _normalize_text(opportunity.audition_type)
+    if modality in {"self-tape", "virtual"}:
+        factors.append(
+            _factor(
+                "practicality.audition.remote",
+                ScoreCategory.PRACTICALITY,
+                8,
+                "The audition is explicitly remote (+8).",
+                200,
+            )
+        )
+    elif modality == "in-person" and _is_proven_local(opportunity, context):
+        factors.append(
+            _factor(
+                "practicality.travel.local",
+                ScoreCategory.PRACTICALITY,
+                4,
+                "Stored audition travel is within the saved local threshold (+4).",
+                210,
+            )
+        )
+    if (
+        opportunity.visibility_status == "travel_exception"
+        or opportunity.hidden_by_rule == "travel_exception"
+    ):
+        factors.append(
+            _factor(
+                "practicality.travel.exception",
+                ScoreCategory.PRACTICALITY,
+                -15,
+                "Existing eligibility state marks this as a travel exception (-15).",
+                211,
+            )
+        )
+    if opportunity.travel_covered is True:
+        factors.append(
+            _factor(
+                "practicality.travel.covered",
+                ScoreCategory.PRACTICALITY,
+                4,
+                "Production explicitly covers travel (+4).",
+                220,
+            )
+        )
+    if opportunity.housing_covered is True:
+        factors.append(
+            _factor(
+                "practicality.housing.covered",
+                ScoreCategory.PRACTICALITY,
+                4,
+                "Production explicitly covers housing (+4).",
+                221,
+            )
+        )
+    if _present_text(opportunity.rate):
+        factors.append(
+            _factor(
+                "practicality.compensation.known",
+                ScoreCategory.PRACTICALITY,
+                3,
+                "Compensation or rate is explicitly provided (+3).",
+                230,
+            )
+        )
+    factors.append(_deadline_factor(opportunity, as_of))
+    return tuple(factors)
+
+
+def _confidence_factors(opportunity: Opportunity) -> tuple[ScoreFactor, ...]:
+    factors = [_parse_confidence_factor(opportunity)]
+    trust = _trust_factor(opportunity)
+    if trust:
+        factors.append(trust)
+    reliability = _source_reliability_factor(opportunity)
+    if reliability:
+        factors.append(reliability)
+    completeness = _completeness_factor(opportunity)
+    if completeness:
+        factors.append(completeness)
+    return tuple(factors)
+
+
+def _actor_interest_factors(context: OpportunityScoringContext) -> tuple[ScoreFactor, ...]:
+    factors = []
+    enabled = [match for match in context.watchlist_matches if match.enabled]
+    if enabled:
+        selected = min(
+            enabled,
+            key=lambda match: (
+                _WATCHLIST_PRIORITY_ORDER[match.priority],
+                _normalize_text(match.key),
+                match.key,
+            ),
+        )
+        points = _WATCHLIST_POINTS[selected.priority]
+        factors.append(
+            _factor(
+                f"interest.watchlist.{selected.priority.lower()}",
+                ScoreCategory.ACTOR_INTEREST,
+                points,
+                f"Highest enabled watch-list match has {selected.priority} priority (+{points}).",
+                400,
+            )
+        )
+    if context.feedback_entries:
+        selected = min(
+            context.feedback_entries,
+            key=lambda entry: (
+                -entry.created_at.astimezone(timezone.utc).timestamp(),
+                _normalize_text(entry.key),
+                entry.key,
+            ),
+        )
+        feedback = _FEEDBACK_POINTS.get(selected.feedback_type)
+        if feedback:
+            factor_id, points, explanation = feedback
+            factors.append(
+                _factor(factor_id, ScoreCategory.ACTOR_INTEREST, points, explanation, 410)
+            )
+    return tuple(factors)
+
+
+def _factor(
+    factor_id: str, category: ScoreCategory, points: int, explanation: str, priority: int
+) -> ScoreFactor:
+    return ScoreFactor(
+        id=factor_id, category=category, points=points, explanation=explanation, priority=priority
+    )
+
+
+def _is_proven_local(opportunity: Opportunity, context: OpportunityScoringContext) -> bool:
+    limit = context.audition_travel_limit_hours
+    drive = opportunity.audition_drive_time
+    return (
+        limit is not None
+        and isinstance(drive, (int, float))
+        and not isinstance(drive, bool)
+        and math.isfinite(drive)
+        and drive >= 0
+        and drive <= limit
+        and opportunity.visibility_status != "travel_exception"
+    )
+
+
+def _deadline_factor(opportunity: Opportunity, as_of: datetime) -> ScoreFactor:
+    valid = []
+    for value in (opportunity.submission_deadline, opportunity.audition_deadline):
+        if not isinstance(value, datetime):
+            continue
+        aware = (
+            value
+            if value.tzinfo and value.utcoffset() is not None
+            else value.replace(tzinfo=timezone.utc)
+        )
+        remaining = (
+            aware.astimezone(timezone.utc) - as_of.astimezone(timezone.utc)
+        ).total_seconds()
+        if remaining > 0:
+            valid.append(remaining)
+    if not valid:
+        return _factor(
+            "practicality.deadline.missing",
+            ScoreCategory.PRACTICALITY,
+            -5,
+            "No future actionable submission or audition deadline is available (-5).",
+            240,
+        )
+    seconds = min(valid)
+    if seconds <= 24 * 3600:
+        return _factor(
+            "practicality.deadline.within_24h",
+            ScoreCategory.PRACTICALITY,
+            8,
+            "The earliest actionable deadline is within 24 hours (+8).",
+            240,
+        )
+    if seconds <= 72 * 3600:
+        return _factor(
+            "practicality.deadline.within_72h",
+            ScoreCategory.PRACTICALITY,
+            5,
+            "The earliest actionable deadline is within 72 hours (+5).",
+            240,
+        )
+    if seconds <= 168 * 3600:
+        return _factor(
+            "practicality.deadline.within_7d",
+            ScoreCategory.PRACTICALITY,
+            2,
+            "The earliest actionable deadline is within seven days (+2).",
+            240,
+        )
+    return _factor(
+        "practicality.deadline.distant",
+        ScoreCategory.PRACTICALITY,
+        0,
+        "The earliest actionable deadline is more than seven days away (0).",
+        240,
+    )
+
+
+def _parse_confidence_factor(opportunity: Opportunity) -> ScoreFactor:
+    raw = (opportunity.source_metadata or {}).get("breakdown_parse_confidence")
+    value = _bounded_number(raw, 0, 100)
+    if value is None:
+        return _factor(
+            "confidence.parser.missing",
+            ScoreCategory.CONFIDENCE,
+            -4,
+            "Parser confidence is missing or invalid (-4).",
+            300,
+        )
+    if value >= 85:
+        return _factor(
+            "confidence.parser.high",
+            ScoreCategory.CONFIDENCE,
+            6,
+            "Parser confidence is at least 85 (+6).",
+            300,
+        )
+    if value >= 70:
+        return _factor(
+            "confidence.parser.medium",
+            ScoreCategory.CONFIDENCE,
+            3,
+            "Parser confidence is between 70 and 85 (+3).",
+            300,
+        )
+    return _factor(
+        "confidence.parser.low",
+        ScoreCategory.CONFIDENCE,
+        -6,
+        "Parser confidence is below 70 (-6).",
+        300,
+    )
+
+
+def _trust_factor(opportunity: Opportunity) -> ScoreFactor | None:
+    status = _normalize_text(
+        ((opportunity.source_metadata or {}).get("trust_verification") or {}).get("status")
+    )
+    if status in {"verified", "pass", "passing"}:
+        return _factor(
+            "confidence.trust.verified",
+            ScoreCategory.CONFIDENCE,
+            5,
+            "Stored trust verification is passing (+5).",
+            310,
+        )
+    if status in {"needs info", "review", "warning", "blocked"}:
+        return _factor(
+            "confidence.trust.review",
+            ScoreCategory.CONFIDENCE,
+            -5,
+            "Stored trust verification requires review (-5).",
+            310,
+        )
+    return None
+
+
+def _source_reliability_factor(opportunity: Opportunity) -> ScoreFactor | None:
+    value = _bounded_number(opportunity.source_reliability_score, 0, 1)
+    if value is None:
+        return None
+    if value >= 0.85:
+        return _factor(
+            "confidence.source.high",
+            ScoreCategory.CONFIDENCE,
+            4,
+            "Source reliability is at least 0.85 (+4).",
+            320,
+        )
+    if value >= 0.70:
+        return _factor(
+            "confidence.source.medium",
+            ScoreCategory.CONFIDENCE,
+            2,
+            "Source reliability is at least 0.70 (+2).",
+            320,
+        )
+    if value < 0.50:
+        return _factor(
+            "confidence.source.low",
+            ScoreCategory.CONFIDENCE,
+            -4,
+            "Source reliability is below 0.50 (-4).",
+            320,
+        )
+    return None
+
+
+def _completeness_factor(opportunity: Opportunity) -> ScoreFactor | None:
+    values = (
+        opportunity.project,
+        opportunity.role,
+        opportunity.description,
+        opportunity.project_type or opportunity.category,
+        opportunity.audition_type,
+        opportunity.location,
+        isinstance(opportunity.submission_deadline, datetime)
+        or isinstance(opportunity.audition_deadline, datetime),
+    )
+    missing = sum(not _present_value(value) for value in values)
+    if missing == 0:
+        return _factor(
+            "confidence.completeness.complete",
+            ScoreCategory.CONFIDENCE,
+            4,
+            "All seven critical opportunity fields are present (+4).",
+            330,
+        )
+    if missing >= 2:
+        return _factor(
+            "confidence.completeness.incomplete",
+            ScoreCategory.CONFIDENCE,
+            -5,
+            f"{missing} of seven critical opportunity fields are missing (-5).",
+            330,
+        )
+    return None
+
+
+def _bounded_number(value, minimum: float, maximum: float) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and minimum <= number <= maximum else None
+
+
+def _present_text(value) -> bool:
+    text = _normalize_text(value)
+    return bool(text) and text not in _MISSING_SENTINELS
+
+
+def _present_value(value) -> bool:
+    return _present_text(value) if isinstance(value, str) or value is None else True
 
 
 def _ordered_factors(factors: Iterable[ScoreFactor]) -> tuple[ScoreFactor, ...]:

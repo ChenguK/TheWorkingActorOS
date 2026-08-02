@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import timedelta
 import json
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from app.services.opportunity_score import (
     ScoreCategory,
     ScoreFactor,
     ScoringContextMatch,
+    WatchListScoringMatch,
     build_opportunity_score,
 )
 from tests.intelligence_builders import (
@@ -41,6 +43,14 @@ def neutral_opportunity(**overrides):
         "union": "Unknown",
         "demographic_match_status": "Needs Review",
         "breakdown_roles": [],
+        "audition_type": "Other",
+        "location": None,
+        "submission_deadline": fixed_as_of() + timedelta(days=10),
+        "source_reliability_score": 0.70,
+        "source_metadata": {
+            "breakdown_parse_confidence": 70,
+            "trust_verification": {"status": "Needs Info"},
+        },
     }
     values.update(overrides)
     return opportunity(**values)
@@ -56,7 +66,12 @@ def score(item=None, actor=None, context=None, database=None):
 
 
 def factor_ids(result):
-    return [factor.id for category in result.categories for factor in category.factors]
+    return [
+        factor.id
+        for category in result.categories
+        if category.category in {ScoreCategory.MATCH_QUALITY, ScoreCategory.CAREER_VALUE}
+        for factor in category.factors
+    ]
 
 
 def match_category(result):
@@ -479,7 +494,7 @@ def test_match_positive_subtotal_caps_at_thirty():
     category = match_category(result)
     assert category.raw_subtotal == 37
     assert category.capped_subtotal == 30
-    assert result.overall_score == 80
+    assert result.overall_score == 98
 
 
 def test_match_negative_cap_and_final_normalization_remain_unchanged():
@@ -515,9 +530,12 @@ def test_career_value_combination_reaches_but_does_not_exceed_cap():
 
 
 def test_watchlist_context_is_deliberately_deferred_to_actor_interest():
-    result = score(context=OpportunityScoringContext(watchlist_matches=("High-priority office",)))
+    result = score(
+        context=OpportunityScoringContext(
+            watchlist_matches=(WatchListScoringMatch("High-priority office", "High"),)
+        )
+    )
     assert factor_ids(result) == []
-    assert result.overall_score == OPPORTUNITY_SCORE_BASELINE
 
 
 def test_positive_factors_cannot_overcome_existing_hard_override():

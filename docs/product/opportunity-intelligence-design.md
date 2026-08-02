@@ -47,39 +47,43 @@ The raw score begins at a documented baseline of **50**. Category contributions 
 | 100 | `career.goal.active_match` | Career value | Best active goal matches project, market, archetype, or casting office | +8 |
 | 110 | `career.dream_target.match` | Career value | Best active dream target matches | +7 |
 | 130 | `career.stretch.strategic` | Career value | Stretch role matches an explicit stretch archetype or active goal | +5 |
-| 200 | `practicality.self_tape` | Practicality | Self-Tape or Virtual audition | +8 |
-| 210 | `practicality.local` | Practicality | In-person travel is within the saved threshold | +4 |
+| 200 | `practicality.audition.remote` | Practicality | Self-Tape or Virtual audition | +8 |
+| 210 | `practicality.travel.local` | Practicality | In-person travel is within the saved threshold | +4 |
 | 211 | `practicality.travel_exception` | Practicality | Existing visibility decision is travel exception | -15 |
 | 220 | `practicality.travel_covered` | Practicality | Travel covered | +4 |
 | 221 | `practicality.housing_covered` | Practicality | Housing covered | +4 |
-| 230 | `practicality.compensation_known` | Practicality | Nonblank rate is present | +3 |
-| 240 | `practicality.deadline.24h` | Practicality | Deadline is after `as_of` and within 24 hours | +8 |
-| 241 | `practicality.deadline.72h` | Practicality | Deadline is within 72 hours | +5 |
-| 242 | `practicality.deadline.7d` | Practicality | Deadline is within seven days | +2 |
-| 243 | `practicality.deadline.missing` | Practicality | No actionable deadline is known | -5 |
-| 300 | `confidence.parse.high` | Confidence | Parse confidence is at least 85 | +6 |
-| 301 | `confidence.parse.medium` | Confidence | Parse confidence is 70–84 | +3 |
-| 302 | `confidence.parse.low` | Confidence | Parse confidence is present below 70 | -6 |
-| 303 | `confidence.parse.missing` | Confidence | Parse confidence is absent or invalid | -4 |
+| 230 | `practicality.compensation.known` | Practicality | Nonblank rate is present | +3 |
+| 240 | `practicality.deadline.within_24h` | Practicality | Deadline is after `as_of` and within 24 hours | +8 |
+| 240 | `practicality.deadline.within_72h` | Practicality | Deadline is within 72 hours | +5 |
+| 240 | `practicality.deadline.within_7d` | Practicality | Deadline is within seven days | +2 |
+| 240 | `practicality.deadline.distant` | Practicality | Deadline is more than seven days away | 0 |
+| 240 | `practicality.deadline.missing` | Practicality | No actionable deadline is known | -5 |
+| 300 | `confidence.parser.high` | Confidence | Parse confidence is at least 85 | +6 |
+| 300 | `confidence.parser.medium` | Confidence | Parse confidence is 70–84.999… | +3 |
+| 300 | `confidence.parser.low` | Confidence | Parse confidence is present below 70 | -6 |
+| 300 | `confidence.parser.missing` | Confidence | Parse confidence is absent, malformed, or out of range | -4 |
 | 310 | `confidence.trust.verified` | Confidence | Existing trust result is verified/passing | +5 |
-| 311 | `confidence.trust.review` | Confidence | Existing trust result requires review | -5 |
+| 310 | `confidence.trust.review` | Confidence | Existing trust result requires review | -5 |
 | 320 | `confidence.source.high` | Confidence | Source reliability is at least 0.85 | +4 |
-| 321 | `confidence.source.medium` | Confidence | Source reliability is 0.70–0.849 | +2 |
-| 322 | `confidence.source.low` | Confidence | Source reliability is below 0.50 | -4 |
-| 330 | `confidence.details.complete` | Confidence | All defined critical fields are present | +4 |
-| 331 | `confidence.details.incomplete` | Confidence | At least two defined critical fields are absent | -5 |
+| 320 | `confidence.source.medium` | Confidence | Source reliability is 0.70–0.849 | +2 |
+| 320 | `confidence.source.low` | Confidence | Source reliability is below 0.50 | -4 |
+| 330 | `confidence.completeness.complete` | Confidence | All defined critical fields are present | +4 |
+| 330 | `confidence.completeness.incomplete` | Confidence | At least two defined critical fields are absent | -5 |
 | 400 | `interest.watchlist.high` | Actor interest | Enabled High-priority watch-list match | +8 |
-| 401 | `interest.watchlist.medium` | Actor interest | Enabled Medium-priority watch-list match | +5 |
-| 402 | `interest.watchlist.low` | Actor interest | Enabled Low-priority watch-list match | +3 |
-| 410 | `interest.feedback.positive` | Actor interest | Latest applicable feedback is This Fits Me or Save For Later | +6 / +2 |
-| 411 | `interest.feedback.stretch` | Actor interest | Latest applicable feedback is Interesting Stretch | +4 |
-| 412 | `interest.feedback.negative` | Actor interest | Latest applicable feedback is Not My Type | -8 |
+| 400 | `interest.watchlist.medium` | Actor interest | Enabled Medium-priority watch-list match | +5 |
+| 400 | `interest.watchlist.low` | Actor interest | Enabled Low-priority watch-list match | +3 |
+| 410 | `interest.feedback.fits_me` | Actor interest | Latest applicable feedback is This Fits Me | +6 |
+| 410 | `interest.feedback.interesting_stretch` | Actor interest | Latest applicable feedback is Interesting Stretch | +4 |
+| 410 | `interest.feedback.save_later` | Actor interest | Latest applicable feedback is Save For Later | +2 |
+| 410 | `interest.feedback.not_my_type` | Actor interest | Latest applicable feedback is Not My Type | -8 |
 
 Category caps prevent a dense record from dominating through repeated evidence: Match quality -35..+30; Career value -10..+20; Practicality -25..+20; Confidence -20..+15; Actor interest -20..+15. Repeated goals, roles, languages, archetypes, or watch-list terms select the single highest contribution for their factor group; they do not accumulate.
 
 Task 3 uses parsed-role `fit_status`, Opportunity demographic state, structured actor role preferences and languages, normalized role/actor union fields, and immutable pre-resolved goal/target matches. Persisted `DreamRoleTarget` has no active/inactive field, so stored targets are implicitly active; an upstream consumer must omit a target it considers inactive. Watch-list points are deferred to Actor Interest because current watch lists represent attention and preference, not an independent career-strategy signal.
 
 The initial critical-field set is fixed and versioned with the scorer: project, role, description, project type/category, audition type, location, and a submission/audition deadline. A field is assessed only by presence, never by invented content.
+
+Deadline bands are inclusive at exactly 24, 72, and 168 hours. The scorer selects the earliest valid future submission or audition deadline, interprets naive persisted deadlines as UTC, and requires an aware `as_of`. Feedback selection uses the latest aware timestamp, then normalized bounded feedback key and original key as deterministic tie-breakers. Submission status is carried in typed context for later action selection but contributes no version-1 points.
 
 ## 4. Overrides and normalization
 
