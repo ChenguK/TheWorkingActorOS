@@ -166,6 +166,10 @@ Keep `enrich()` unchanged during initial implementation. It remains the mutating
 
 The Strategy Agent remains asset-package and submission-strategy analysis. The Intelligence score ranks attention across opportunities. Neither consumes or overwrites the other in Phase 1.
 
+Ranking uses two pure stages. `build_opportunity_ranking_entry(opportunity, score, *, as_of)` creates a frozen `OpportunityRankingEntry` containing only the Opportunity UUID, completed version-1 score, earliest future actionable deadline normalized to UTC, normalized project and role keys, and normalized canonical source-URL key. It requires the score ID to match the Opportunity UUID and rejects unsupported score versions. Submission and audition deadlines are the only actionable sources; naive stored values are UTC, expired values are ignored, and `as_of` must be aware. Project and role keys use Unicode case-folding plus collapsed whitespace, with missing values represented by the empty string. URL keys use the existing source-identity canonicalizer, then case-folding; blank URLs use the empty string, while invalid or credential-bearing URLs are rejected.
+
+`rank_opportunity_entries(entries)` consumes only those frozen projections and returns an immutable tuple ordered by score descending, future deadline ascending with missing last, project key, role key, source URL key, and UUID text. Duplicate input UUIDs are rejected deterministically; entries are never merged or silently discarded. Ranking does not use suggested action, confidence, category totals, insertion order, database order, or ORM state.
+
 ## 9. Persistence recommendation
 
 Calculate Phase 1 scores **on demand**. Do not add columns, tables, migrations, or reuse `quality_score`, `urgency_score`, or `AgentRecommendation.score`.

@@ -6,10 +6,12 @@ from enum import Enum
 import math
 import re
 from typing import Iterable
+from uuid import UUID
 
 from app.automation.discovery.classification import REJECTED_CLASSIFICATIONS
 from app.db.models import ActorProfile, BreakdownRole, Opportunity
 from app.services.demographic_match_service import LANGUAGE_GROUPS
+from app.services.source_identity import SourceIdentityService
 
 
 OPPORTUNITY_SCORING_VERSION = 1
@@ -417,6 +419,50 @@ class OpportunityScore:
         }
 
 
+@dataclass(frozen=True)
+class OpportunityRankingEntry:
+    opportunity_id: UUID
+    score: OpportunityScore
+    actionable_deadline: datetime | None
+    project_key: str
+    role_key: str
+    source_url_key: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.opportunity_id, UUID):
+            raise ValueError("ranking opportunity_id must be a UUID")
+        if not isinstance(self.score, OpportunityScore):
+            raise ValueError("ranking score must be an OpportunityScore")
+        if self.score.opportunity_id != str(self.opportunity_id):
+            raise ValueError("ranking score opportunity_id does not match the projection")
+        if self.score.scoring_version != OPPORTUNITY_SCORING_VERSION:
+            raise ValueError("ranking supports only scoring version 1")
+        if self.actionable_deadline is not None and (
+            not isinstance(self.actionable_deadline, datetime)
+            or self.actionable_deadline.tzinfo is None
+            or self.actionable_deadline.utcoffset() is None
+        ):
+            raise ValueError("ranking actionable_deadline must be timezone-aware")
+        for field_name in ("project_key", "role_key", "source_url_key"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise ValueError(f"ranking {field_name} must be text")
+
+    def as_dict(self) -> dict:
+        return {
+            "opportunity_id": str(self.opportunity_id),
+            "score": self.score.as_dict(),
+            "actionable_deadline": (
+                self.actionable_deadline.isoformat()
+                if self.actionable_deadline is not None
+                else None
+            ),
+            "project_key": self.project_key,
+            "role_key": self.role_key,
+            "source_url_key": self.source_url_key,
+        }
+
+
 def build_opportunity_score(
     *,
     opportunity_id: str,
@@ -530,8 +576,7 @@ def score_opportunity(
         raise ValueError("context must be an OpportunityScoringContext")
     if not isinstance(actor, ActorProfile):
         raise ValueError("actor must be an ActorProfile")
-    if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
-        raise ValueError("as_of must be timezone-aware")
+    _require_aware_as_of(as_of)
     override = _hard_override_reason(opportunity)
     factors = (
         ()
@@ -558,6 +603,65 @@ def score_opportunity(
                 submission_status=context.submission_status,
             ),
         ),
+    )
+
+
+def build_opportunity_ranking_entry(
+    opportunity: Opportunity,
+    score: OpportunityScore,
+    *,
+    as_of: datetime,
+) -> OpportunityRankingEntry:
+    if not isinstance(opportunity, Opportunity):
+        raise ValueError("opportunity must be an Opportunity")
+    if not isinstance(score, OpportunityScore):
+        raise ValueError("score must be an OpportunityScore")
+    _require_aware_as_of(as_of)
+    if not isinstance(opportunity.id, UUID):
+        raise ValueError("opportunity id must be a UUID")
+    source_url_key = ""
+    if _normalize_text(opportunity.original_post_url):
+        source_url_key = SourceIdentityService.canonicalize_url(
+            opportunity.original_post_url
+        ).casefold()
+    return OpportunityRankingEntry(
+        opportunity_id=opportunity.id,
+        score=score,
+        actionable_deadline=_earliest_future_deadline(
+            (opportunity.submission_deadline, opportunity.audition_deadline),
+            as_of,
+        ),
+        project_key=_normalize_text(opportunity.project),
+        role_key=_normalize_text(opportunity.role),
+        source_url_key=source_url_key,
+    )
+
+
+def rank_opportunity_entries(
+    entries: Iterable[OpportunityRankingEntry],
+) -> tuple[OpportunityRankingEntry, ...]:
+    values = tuple(entries)
+    if any(not isinstance(entry, OpportunityRankingEntry) for entry in values):
+        raise ValueError("ranking entries must contain only OpportunityRankingEntry values")
+    identifiers = [str(entry.opportunity_id) for entry in values]
+    duplicates = sorted(
+        identifier for identifier in set(identifiers) if identifiers.count(identifier) > 1
+    )
+    if duplicates:
+        raise ValueError(f"duplicate opportunity IDs are not allowed: {', '.join(duplicates)}")
+    return tuple(
+        sorted(
+            values,
+            key=lambda entry: (
+                -entry.score.overall_score,
+                entry.actionable_deadline is None,
+                entry.actionable_deadline or datetime.max.replace(tzinfo=timezone.utc),
+                entry.project_key,
+                entry.role_key,
+                entry.source_url_key,
+                str(entry.opportunity_id),
+            ),
+        )
     )
 
 
@@ -902,21 +1006,11 @@ def _is_proven_local(opportunity: Opportunity, context: OpportunityScoringContex
 
 
 def _deadline_factor(opportunity: Opportunity, as_of: datetime) -> ScoreFactor:
-    valid = []
-    for value in (opportunity.submission_deadline, opportunity.audition_deadline):
-        if not isinstance(value, datetime):
-            continue
-        aware = (
-            value
-            if value.tzinfo and value.utcoffset() is not None
-            else value.replace(tzinfo=timezone.utc)
-        )
-        remaining = (
-            aware.astimezone(timezone.utc) - as_of.astimezone(timezone.utc)
-        ).total_seconds()
-        if remaining > 0:
-            valid.append(remaining)
-    if not valid:
+    deadline = _earliest_future_deadline(
+        (opportunity.submission_deadline, opportunity.audition_deadline),
+        as_of,
+    )
+    if deadline is None:
         return _factor(
             "practicality.deadline.missing",
             ScoreCategory.PRACTICALITY,
@@ -924,7 +1018,7 @@ def _deadline_factor(opportunity: Opportunity, as_of: datetime) -> ScoreFactor:
             "No future actionable submission or audition deadline is available (-5).",
             240,
         )
-    seconds = min(valid)
+    seconds = (deadline - as_of.astimezone(timezone.utc)).total_seconds()
     if seconds <= 24 * 3600:
         return _factor(
             "practicality.deadline.within_24h",
@@ -956,6 +1050,30 @@ def _deadline_factor(opportunity: Opportunity, as_of: datetime) -> ScoreFactor:
         "The earliest actionable deadline is more than seven days away (0).",
         240,
     )
+
+
+def _earliest_future_deadline(
+    values: tuple[object, ...],
+    as_of: datetime,
+) -> datetime | None:
+    _require_aware_as_of(as_of)
+    normalized = []
+    for value in values:
+        if not isinstance(value, datetime):
+            continue
+        aware = (
+            value
+            if value.tzinfo is not None and value.utcoffset() is not None
+            else value.replace(tzinfo=timezone.utc)
+        ).astimezone(timezone.utc)
+        if aware > as_of.astimezone(timezone.utc):
+            normalized.append(aware)
+    return min(normalized) if normalized else None
+
+
+def _require_aware_as_of(as_of: datetime) -> None:
+    if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
 
 
 def _parse_confidence_factor(opportunity: Opportunity) -> ScoreFactor:
