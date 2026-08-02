@@ -176,9 +176,73 @@ Contributor serialization is allowlist-first. Operational role-fit, modality, de
 
 No actor produces `intelligence: null`; an evaluated neutral score produces a populated score-50 projection. The frontend renders absent and explicit-null values as the unchanged legacy card, and treats unsupported versions the same way without another request. Version 1 preserves role and project first, then shows visible action, numeric score, confidence, an assistive action/score label, and a semantic `details/summary` contributor disclosure. Hard overrides show only a bounded generic reason. The strict browser contract remains one `GET /command-center` request.
 
+## Task 9 — Characterize the broader presentation boundary
+
+### Executive decision
+
+**Defer broader exposure and keep Opportunity Intelligence Dashboard-only for the portfolio deployment.** The current eight-card priority widget already owns the distinct daily decision—what deserves attention now—and visibly demonstrates deterministic scoring, ranking, privacy-safe explanation, versioned API design, accessibility, and bounded performance. No inspected secondary consumer satisfies all nine implementation criteria. Adding the same score elsewhere would currently be repetition, unsafe top-eight reuse, or a new scoring/API boundary rather than a distinct product decision.
+
+### Consumers, decisions, and current data flows
+
+| Consumer | Actor decision | Current route → service/schema | Frontend owner and ordering | Intelligence need and finding |
+| --- | --- | --- | --- | --- |
+| Dashboard priorities | “What should I review or act on today?” | `GET /command-center` → `CommandCenterService.snapshot/read_snapshot` → `ActorCommandCenterRead` | `getCommandCenter` → `useCommandCenter` → `DashboardPanel/OpportunityPriorityCard`; deterministic score rank, top 8, widget shows 3 | Confirmed owner. Action, score, confidence and contributors directly support prioritization. |
+| Breakdowns list | “Which persisted breakdown should I inspect, edit, parse, track, or reject?” | `GET /opportunities` → `OpportunityService.list`/`OpportunityRepository.search` → `OpportunityRead` | `listBreakdowns` → `useBreakdowns` → `BreakdownsPanel/OpportunityManager`; created-at descending, client filters Film/TV, theater, needs-review and travel | Score could help full-list prioritization, but chronology/filter semantics, 100-row coverage, payload and repeated scoring are unresolved. Not justified before deployment. |
+| Expanded breakdown/detail | “Are the source, parsed role, eligibility, deadline and instructions accurate enough to act on?” | The UI selects from the list query through `useBreakdown`; `GET /opportunities/{id}` exists but has no active detail hook | `OpportunityManager`, `BreakdownViewer`, `BreakdownDetails`; no distinct detail request | A future public-safe “why” view is the strongest candidate, but there is no existing detail composition boundary with actor/context data. Adding one now requires a new request or broad list scoring. |
+| Hidden review | “Can missing/uncertain facts be completed, or should this item be approved/deleted?” | `GET /automation/opportunities/hidden` → route-owned filtered `select(Opportunity)` → `OpportunityRead` | `useHiddenBreakdowns` → `HiddenOpportunityReview`; created-at descending | Existing flag reason, missing fields, trust, travel, parse and demographic evidence explain review ownership. A score/action could conflict with discovery routing and imply eligibility before uncertainty is resolved. |
+| Material matches | “Which saved material fits this role?” | `GET /opportunities/material-matches` → `MaterialMatchService.find_matches` → `MaterialOpportunityMatch` | `useMaterialMatches` → readiness/material panels; material score ordering | Opportunity score would compete with a purpose-specific material-fit score and answer a different question. Reject exposure here. |
+| Audition readiness | “Am I prepared to audition for this role?” | `GET /intelligence/readiness/opportunities` → `IntelligenceService.audition_readiness_for_all` → `AuditionReadinessRead` | `useAuditionReadiness` → `MergedAuditionReadinessPanel` | Readiness percentage, character/material/travel state already own preparation. Opportunity priority would duplicate inputs and blur selection versus preparation. |
+| Similar breakdowns | “What historical work resembles this breakdown?” | `GET /opportunities/{id}/similar` → `ExecutiveIntelligenceService.breakdown_similarity`; no frontend consumer | No current hook/component | Similarity is comparative history, not present-tense prioritization. No presentation owner exists. |
+| Auditions/submissions | “What is the current workflow state and next audition task?” | `/submissions`, `/command-center/self-tapes`, callback/journal routes | `AuditionsPage/AuditionsPanel`; workflow/date ordering | Tracked items intentionally receive `save_for_later/already_tracked`; showing that beside active workflow would be redundant and could imply completed work remains a candidate. |
+| Journal | “What happened and what should be recorded?” | `/journal` plus existing option lists | `JournalPage/JournalPanel`; historical ordering | Historical record ownership conflicts with a volatile request-time priority score. |
+| Calendar | “What is due or scheduled when?” | Calendar events, Opportunities, submissions, self-tapes, callbacks, plus existing command-center request for platform check-ins | `CalendarPage/ActorCalendar`; chronological | It already loads command center, but consumes platform check-ins only. UUID joining top-eight scores would be accidental coupling and score is redundant with deadline/event ownership. |
+| Materials library | “Which reusable asset should I maintain or use?” | `/assets`, reusable self-tapes/analytics, Opportunities and submissions | `MaterialsPage/MaterialsPanel` | Opportunity scoring would distract from asset freshness/performance and material ownership. |
+
+### Current request, query, identity, and invalidation boundaries
+
+All relevant Opportunity-family responses carry the stable Opportunity UUID. That makes a join technically possible, not architecturally safe. `GET /opportunities` is bounded to 100 in `OpportunityRepository.search`, ordered by `created_at DESC`, and has no frontend pagination. Its clean repository read begins with one SELECT, but `OpportunityService.list` is not a pure fixed-query boundary: it conditionally repairs deadlines, trust, parsed details, roles and character profiles and may commit; response serialization also traverses role/section/parse/submission relationships. `GET /opportunities/{id}` begins with `Session.get`, may verify trust and commit, and likewise serializes nested relationships. A single universal list/detail query-count promise therefore does not exist today and must be established before scoring is attached to either path.
+
+The hidden-review route starts with one unbounded filtered Opportunity SELECT and then serializes the same nested `OpportunityRead`; it has no explicit pagination or scoring context. Material matching and readiness already perform separate actor/material/travel/history work. The command-center is the only proven constant scoring boundary: 24 SELECTs for an empty snapshot and 28 SELECTs for 1–100 candidates, independent of candidate count, with one shared `as_of`, a 100-candidate ceiling and an eight-card response.
+
+The frontend Breakdown query family refetches on mount and is invalidated by parsing, classification, approval, rejection and discovery workflows. The command-center query is a separate chief-of-staff owner with its own invalidation contracts. Although relevant Opportunity mutations often invalidate both, the timing and coverage are not identical. A cross-feature join can therefore show a newer Opportunity beside an older score or omit a valid item outside the top eight. No inspected non-Dashboard component currently imports the summary type, reads `Opportunity.intelligence`, or requests a score endpoint.
+
+### UUID-join and consistency assessment
+
+Reusing command-center summaries by UUID is rejected. Summaries cover only the ranked top eight of at most 100 candidates; presenting them in a complete list would create unexplained partial coverage. Breakdowns, Auditions, Materials and Journal do not load command center. Calendar does, but only for operational platform check-ins. Adding `useCommandCenter` to those feature owners would reverse the current dependency, inherit chief-of-staff refresh/visit behavior, add a request on most routes, and couple unrelated invalidation policies.
+
+Independent scoring is also rejected for now. The command center assembles actor, latest feedback, goals, dream targets, watch lists, submissions and travel context in bounded batches and evaluates all candidates with one shared `as_of`. List/detail services do not have that context or shared timestamp. Calling the scorer there could produce a second score for the same UUID in one session, increase queries, and disagree with Dashboard ordering. Any future consumer requires one request-local authoritative score owner, the same context assembler and `as_of`, and an additive response that returns the score with the data being acted on—never a client join to top-eight data.
+
+### Presentation options
+
+| Option | Benefit | Cost/risk | Decision |
+| --- | --- | --- | --- |
+| A. Dashboard only | Clear daily prioritization; one evaluation; compact API; strongest explainability demonstration | Scores unavailable for non-top-eight detail review | **Approve for deployment.** |
+| B. Detail only | Could support a distinct “why should I act?” decision without list clutter | Current UI has no detail request/composition boundary; would require a new request or scoring broad list data; richer explanations need a separate safe design | Best future candidate, but prerequisites are unmet; defer. |
+| C. List summaries | Full-list prioritization and visible comparison | Up to 100 evaluations, ordering conflict, dense mobile UI, conditional list writes, roughly 55.8 KB maximum added summaries, repeated scoring | Reject before deployment. |
+| D. Command-center UUID join | No backend contract change | Only eight summaries, stale/missing rows, cross-feature dependency, extra command-center request and visit/refresh semantics | Reject. |
+| E. No additional pre-deployment presentation | Preserves proven architecture and leaves time for demo/deployment polish | Does not show per-detail intelligence | **Recommended.** Equivalent to A for current release scope. |
+
+### Payload, performance, privacy, and accessibility
+
+The deterministic fictional `OpportunityRead` fixture is 1,766 compact bytes; eight copies are 14,137 bytes and 100 are 176,701 bytes. Adding the characterized maximum 558-byte summary to 100 list rows would add up to approximately 55,800 bytes before envelope effects, while also requiring scoring context and computation for every row. A detail projection would add at most the existing 2,048-byte enforced summary bound, but has no safe computation owner today. Request-scoped computation remains viable; caching is neither required nor justified until a real broader boundary exists.
+
+The Task 8 serializer is sufficient for any future compact summary. None of the inspected consumers justifies categories, full factors, raw eligibility, profile values, demographic/language/union values, goals, feedback, watch-list labels, trust internals, ranking keys or `as_of`. A future detail experience that genuinely needs richer explanations must define a separate bounded public-safe projection rather than expose `OpportunityScore.as_dict()`.
+
+List repetition would create mobile density and visual noise beside filters, badges and primary actions. Hidden review already has dense corrective controls and reason disclosures. Auditions, Calendar and Journal require workflow or chronological hierarchy. If detail exposure is later approved, role/project and the primary workflow action must precede intelligence; action, score and confidence must remain visible text; contributor disclosure must be keyboard-operable with expanded state; positive/negative meaning must be textual; and absent, null, neutral, hard-override and unsupported-version behavior must match Task 8 without color-only meaning.
+
+### Compatibility conclusions and portfolio value
+
+Absent, explicit-null and unsupported summaries remain legacy presentation states; neutral is evaluated score 50; hard overrides use bounded public reasons; duplicates and tracked records keep deterministic non-application actions. No ActorProfile or internal fallback yields unavailable intelligence, not a fabricated baseline. Items outside the top eight have no command-center summary. Stale summaries and differing invalidation timing make cross-feature reuse unsafe.
+
+The Dashboard already proves the valuable engineering story: deterministic factor scoring, bounded batch context, stable ranking, single evaluation, privacy-aware serialization, schema versioning, additive compatibility, accessible explainability, constant queries and strict request graphs. Repeating score badges on the Breakdowns list would demonstrate no distinct capability. Portfolio effort has higher value in deployment/demo data, Chief of Staff clarity, Career Agent integration, manual import reliability and concise architecture documentation.
+
+### Prerequisites for any future broader implementation
+
+A future Opportunity-detail integration may be reconsidered only after: (1) a real routed detail consumer owns a distinct apply/review decision; (2) its existing response can carry the projection without a second request; (3) one authoritative request-local score/context assembler is shared without calling the scorer twice; (4) clean and repair-path query counts are characterized and bounded; (5) mutation invalidation aligns with command center; (6) the compact Task 8 serializer remains sufficient or a separate safe detail projection is designed; (7) mobile/accessibility behavior is tested; and (8) measured user or portfolio value exceeds deployment cost. Until then, no broader implementation plan is approved.
+
 ## Deferred phases
 
-- Define an API response only after a real consumer is selected.
+- Define any richer detail API response only after a distinct detail consumer is selected.
 - Add frontend score explanations and action labels in a separate vertical slice.
 - Measure query and calculation cost before adding request-scoped caching.
 - Consider durable history only with a concrete audit or trend requirement and a separate migration design.
