@@ -70,6 +70,8 @@ Suggested commit: `feat(intelligence): rank scored opportunities deterministical
 
 Only after the score contract is reviewed, select one existing backend read path and assemble its scoring context explicitly. Keep this separate from discovery and from the mutating `enrich()` path. Do not expose a new API in the same commit; API and frontend work require their own approved contracts.
 
+The command-center queue was selected as the eventual consumer, but its public snapshot path intentionally refreshes persisted signals and records a dashboard visit. Before ranking integration, the command center therefore exposes separate internal boundaries: `refresh_signals()` owns enrichment, alert/nudge creation, and its commit; `record_visit()` owns visit persistence and its commit; and `read_snapshot()` reads only persisted state. `read_opportunity_candidates()` supplies at most 100 visible, non-demo acting-breakdown candidates in deterministic database order with the relationships needed for later context assembly. The public route continues to refresh, read the existing eight-item display queue, and record the visit; its schema and “since your last visit” behavior are unchanged. No intelligence score or rank is integrated by this precursor.
+
 Acceptance criteria:
 
 - Query count is characterized and bounded.

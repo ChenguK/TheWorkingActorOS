@@ -28,9 +28,21 @@ class ExecutiveAgent:
         self.db = db
 
     def top_priorities(self) -> list[dict]:
-        now = datetime.now(timezone.utc)
+        return self._top_priorities(read_only=False)
+
+    def read_top_priorities(self, *, as_of: datetime) -> list[dict]:
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
+        return self._top_priorities(read_only=True, as_of=as_of)
+
+    def _top_priorities(
+        self, *, read_only: bool, as_of: datetime | None = None
+    ) -> list[dict]:
+        now = as_of or datetime.now(timezone.utc)
         candidates: list[dict] = []
-        candidates.extend(self._platform_check_in_priorities())
+        candidates.extend(
+            self._platform_check_in_priorities(read_only=read_only, as_of=now)
+        )
         candidates.extend(self._deadline_priorities(now))
         candidates.extend(self._strong_match_priorities())
         candidates.extend(self._career_task_priorities())
@@ -89,8 +101,15 @@ class ExecutiveAgent:
             )
         return rows
 
-    def _platform_check_in_priorities(self) -> list[dict]:
-        check_ins = OperationsService(self.db).today_platform_check_ins()
+    def _platform_check_in_priorities(
+        self, *, read_only: bool = False, as_of: datetime | None = None
+    ) -> list[dict]:
+        operations = OperationsService(self.db)
+        check_ins = (
+            operations.read_today_platform_check_ins(as_of=as_of)
+            if read_only
+            else operations.today_platform_check_ins()
+        )
         unchecked = [item for item in check_ins if not item["checked_today"]]
         if not unchecked:
             return []

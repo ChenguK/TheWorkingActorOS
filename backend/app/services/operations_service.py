@@ -14,7 +14,6 @@ from app.db.models import (
     AvailabilityBlock,
     CastingPlatformSubscription,
     DailyPlatformCheckIn,
-    Opportunity,
     ProfessionalEquipmentProfile,
     Submission,
 )
@@ -193,6 +192,31 @@ class OperationsService:
                 if not row.get("id"):
                     self.db.refresh(self.db.get(DailyPlatformCheckIn, row["id"]))
         return rows
+
+    def read_today_platform_check_ins(
+        self,
+        user_timezone: str = "America/New_York",
+        *,
+        as_of: datetime | None = None,
+    ) -> list[dict]:
+        today = self._local_date(user_timezone, as_of=as_of)
+        rows = self.db.execute(
+            select(DailyPlatformCheckIn, CastingPlatformSubscription)
+            .join(
+                CastingPlatformSubscription,
+                CastingPlatformSubscription.id
+                == DailyPlatformCheckIn.platform_subscription_id,
+            )
+            .where(CastingPlatformSubscription.active.is_(True))
+            .where(CastingPlatformSubscription.has_subscription.is_(True))
+            .where(DailyPlatformCheckIn.check_date == today)
+            .where(DailyPlatformCheckIn.timezone == user_timezone)
+            .order_by(CastingPlatformSubscription.platform_name.asc())
+        ).all()
+        return [
+            self._check_in_payload(check_in, subscription)
+            for check_in, subscription in rows
+        ]
 
     def update_today_platform_check_in(
         self,
@@ -397,11 +421,20 @@ class OperationsService:
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
     def _local_today(self, timezone_name: str) -> date:
+        return self._local_date(timezone_name)
+
+    def _local_date(
+        self, timezone_name: str, *, as_of: datetime | None = None
+    ) -> date:
         try:
             tz = ZoneInfo(timezone_name)
         except ZoneInfoNotFoundError:
             tz = ZoneInfo("America/New_York")
-        return datetime.now(tz).date()
+        if as_of is None:
+            return datetime.now(tz).date()
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
+        return as_of.astimezone(tz).date()
 
     def _daily_check_in(
         self,

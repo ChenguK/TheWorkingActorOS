@@ -26,6 +26,8 @@ from app.services.operations_service import OperationsService
 
 
 POSITIVE_OUTCOMES = set(CALLBACK_STATUSES)
+COMMAND_CENTER_DISPLAY_LIMIT = 8
+COMMAND_CENTER_CANDIDATE_LIMIT = 100
 
 
 def real_breakdown_filter():
@@ -36,20 +38,36 @@ class CommandCenterService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def snapshot(self) -> dict:
+    def snapshot(self, *, as_of: datetime | None = None) -> dict:
         self.refresh_signals()
-        now = datetime.now(timezone.utc)
+        OperationsService(self.db).today_platform_check_ins()
+        now = as_of or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
         actor = self.db.scalars(select(ActorProfile).limit(1)).first()
         since_at = self._last_visit_at(actor, now)
+        result = self.read_snapshot(actor=actor, as_of=now, since_at=since_at)
+        self.record_visit(actor, now)
+        return result
+
+    def read_snapshot(
+        self,
+        *,
+        actor: ActorProfile | None,
+        as_of: datetime,
+        since_at: datetime,
+    ) -> dict:
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("as_of must be timezone-aware")
+        if since_at.tzinfo is None or since_at.utcoffset() is None:
+            raise ValueError("since_at must be timezone-aware")
+        now = as_of
         soon = now + timedelta(days=14)
         visible_opportunities = list(
             self.db.scalars(
-                select(Opportunity)
-                .where(Opportunity.visibility_status == "visible")
-                .where(Opportunity.breakdown_classification.in_(MAIN_BREAKDOWN_CLASSIFICATIONS))
-                .where(real_breakdown_filter())
+                self._opportunity_candidate_statement()
                 .order_by(Opportunity.urgency_score.desc(), Opportunity.quality_score.desc())
-                .limit(8)
+                .limit(COMMAND_CENTER_DISPLAY_LIMIT)
             )
         )
         queued = list(
@@ -63,8 +81,7 @@ class CommandCenterService:
         deadlines = [
             item
             for item in self.db.scalars(
-                select(Opportunity).where(Opportunity.visibility_status == "visible").where(real_breakdown_filter())
-                .where(Opportunity.breakdown_classification.in_(MAIN_BREAKDOWN_CLASSIFICATIONS))
+                self._opportunity_candidate_statement()
             )
             if self._has_deadline_between(item, now, soon)
         ]
@@ -93,13 +110,15 @@ class CommandCenterService:
             )
         )
         asset_performance = self.asset_performance()
-        platform_check_ins = OperationsService(self.db).today_platform_check_ins()
+        platform_check_ins = OperationsService(self.db).read_today_platform_check_ins(
+            as_of=now
+        )
         since_last_visit = self._since_last_visit(since_at, asset_performance)
-        self._record_visit(actor, now)
+        priorities = ExecutiveAgent(self.db).read_top_priorities(as_of=now)
         return {
             "today_opportunities": [self._opportunity_card(item) for item in visible_opportunities],
-            "executive_priorities": ExecutiveAgent(self.db).top_priorities(),
-            "chief_of_staff_priorities": ExecutiveAgent(self.db).top_priorities(),
+            "executive_priorities": priorities,
+            "chief_of_staff_priorities": priorities,
             "since_last_visit": since_last_visit,
             "upcoming_attention": [self._deadline_card(item) for item in sorted(deadlines, key=self._deadline_sort)[:5]],
             "today_career_recommendation": self._today_career_recommendation(tasks, gaps),
@@ -111,6 +130,32 @@ class CommandCenterService:
             "material_gaps": [self._gap_card(item) for item in gaps],
             "asset_performance": asset_performance,
         }
+
+    def read_opportunity_candidates(self) -> list[Opportunity]:
+        return list(
+            self.db.scalars(
+                self._opportunity_candidate_statement()
+                .options(
+                    selectinload(Opportunity.breakdown_roles),
+                    selectinload(Opportunity.submissions),
+                )
+                .order_by(Opportunity.created_at.desc(), Opportunity.id.asc())
+                .limit(COMMAND_CENTER_CANDIDATE_LIMIT)
+            )
+        )
+
+    @staticmethod
+    def _opportunity_candidate_statement():
+        return (
+            select(Opportunity)
+            .where(Opportunity.visibility_status == "visible")
+            .where(
+                Opportunity.breakdown_classification.in_(
+                    MAIN_BREAKDOWN_CLASSIFICATIONS
+                )
+            )
+            .where(real_breakdown_filter())
+        )
 
     def refresh_signals(self) -> None:
         intelligence = OpportunityIntelligenceService(self.db)
@@ -124,7 +169,12 @@ class CommandCenterService:
         assets = list(self.db.scalars(select(Asset)))
         submissions = [
             submission
-            for submission in self.db.scalars(select(Submission).options(selectinload(Submission.assets)))
+            for submission in self.db.scalars(
+                select(Submission).options(
+                    selectinload(Submission.assets),
+                    selectinload(Submission.opportunity),
+                )
+            )
             if not submission.opportunity or not submission.opportunity.is_demo_data
         ]
         rows = []
@@ -210,7 +260,7 @@ class CommandCenterService:
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         return now - timedelta(days=7)
 
-    def _record_visit(self, actor: ActorProfile | None, now: datetime) -> None:
+    def record_visit(self, actor: ActorProfile | None, now: datetime) -> None:
         state = self._chief_of_staff_state(actor)
         if not state:
             state = ChiefOfStaffState(actor_profile_id=actor.id if actor else None)
