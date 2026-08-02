@@ -81,6 +81,88 @@ Acceptance criteria:
 
 Suggested commit: `feat(intelligence): integrate read-only opportunity ranking`
 
+## Task 7B — Characterize the command-center API boundary
+
+### Current boundary and absence guarantee
+
+`GET /api/v1/command-center` is owned by `backend/app/api/v1/routes/command_center.py::get_command_center`, which calls `CommandCenterService.snapshot()` and validates the result with `ActorCommandCenterRead`. The response is a Pydantic model, but `today_opportunities` is intentionally a `list[dict]`; each entry is the manual `_opportunity_card()` projection rather than ORM serialization. A current card contains exactly `id`, `role`, `project`, `original_post_url`, `priority`, `urgency_score`, `quality_score`, `confidence_level`, and `risk_level`. `original_post_url` is the only nullable card field in ordinary output. The response contains no intelligence version, deterministic overall score, suggested action or reason, category/factor details, contributors, intelligence confidence, hard-override details, ranking projection or position, `as_of`, or scoring context. Intelligence affects only which existing card identities appear and their order.
+
+The frontend receives this through `getCommandCenter()` and `useCommandCenter()` under the existing live TanStack Query key. `ActorCommandCenter.today_opportunities` is `CommandCenterCard[]`, where `CommandCenterCard` is a loose scalar-valued record. The Dashboard reads only `role` and `project`, presents loading with `role="status"`, presents failure with `role="alert"`, and uses an empty-state message when no priority breakdown exists. The generic request client performs no runtime response parsing. Current TypeScript fixtures and the strict Playwright mock contain no intelligence data; Playwright permits exactly the existing `GET /command-center` request and no score/history request. No existing response-size test existed before this characterization. Current OpenAPI exposes `today_opportunities.items` as an object with arbitrary properties, and current contract tests depend on route behavior and selected fields rather than a generated client with a typed card schema.
+
+### Recommended additive owner and versioned summary
+
+Future exposure should be one optional nested `intelligence` projection on each existing Opportunity card. The score belongs to that actor-specific, time-relative ranked card; nesting avoids collisions with legacy `quality_score`, `urgency_score`, and Strategy Agent score fields, adds no request or parallel ID map, and remains ergonomic for card rendering. A new endpoint would split ordering from its explanation, while a parallel response map would duplicate identity bookkeeping. The eventual schema must replace the loose proposal with an explicit typed nested model, but retain backward-compatible omission.
+
+The proposed contract is:
+
+```json
+{
+  "intelligence": {
+    "version": 1,
+    "overall_score": 87,
+    "action": "apply_now",
+    "action_reason_code": "high_priority_actionable",
+    "confidence": {
+      "level": "High",
+      "summary": "High confidence: 4 bounded confidence factors contribute +15 points."
+    },
+    "hard_override": false,
+    "hard_override_reason": null,
+    "top_positive_contributors": [
+      {
+        "id": "match.role_fit.strong",
+        "points": 18,
+        "explanation": "Strong Fit is the best parsed role fit (+18)."
+      }
+    ],
+    "top_negative_contributors": []
+  }
+}
+```
+
+`version` is a distinct command-center intelligence contract version, not the discovery-evidence version. It begins at integer `1`. `overall_score` is 0–100. `action` uses the existing six serialized `SuggestedAction` values; the frontend derives human-readable labels, so the API does not duplicate an `action_label`. `action_reason_code` and hard-override reasons use current bounded enums. Confidence preserves the current `High`, `Medium`, `Low`, or `Not Scored` domain values. Contributor arrays are capped at three positive and three negative entries. Contributor `explanation` is optional and appears only for an approved public-safe template. Unknown versions must be treated as absent by the frontend. Adding or omitting the nested projection requires no data migration and no persisted score.
+
+### Absent, neutral, override, duplicate, and tracked states
+
+An omitted field is valid for old responses. A new server may use `intelligence: null` when evaluation is unavailable because no actor exists, the consumer intentionally skipped scoring, or a bounded internal evaluation failed while the legacy card remains usable. Evaluated neutral intelligence is a populated version-1 projection, normally with score 50, empty contributors, and its deterministic confidence/action fields. It must never be represented as `null` or `{}`.
+
+Hard user rejection, expiration, discarded state, proven demographic incompatibility, excluded role type, and hard travel failure may expose score `0`, action `ignore`, `action_reason_code: hard_override`, and the stable bounded `hard_override_reason`. Raw rejection text and internal rule payloads remain excluded. Retained duplicates expose only deterministic `ignore / duplicate_opportunity`. Submitted, requested, callback, pinned, booked, passed, and no-response states expose only `save_for_later / already_tracked`; workflow notes and the private status history are not part of this projection.
+
+### Payload-size evidence
+
+Measurements use compact, key-sorted UTF-8 JSON, the complete current command-center envelope, deterministic fictional cards, the actual version-1 score serializer, and no production data.
+
+| Fixture | Bytes | Increase over corresponding current envelope |
+| --- | ---: | ---: |
+| One current card | 571 | baseline |
+| Eight current cards | 2,363 | baseline |
+| One card with summary | 1,193 | 108.9% |
+| Eight cards with summaries | 7,339 | 210.6% |
+| One card with full maximum-factor score | 4,927 | 762.9% |
+| Eight cards with full maximum-factor scores | 37,211 | 1,474.7% |
+| One hard-override full score | 1,589 | 178.3% |
+| One neutral full score | 1,632 | 185.8% |
+
+The maximum-factor full score is 4,927 bytes. The largest growth is the repeated five-category structure, factor objects, contributor duplication, and explanation prose. The summary removes category totals, complete factor arrays, score explanation, action explanation, baseline, and Opportunity ID duplication. Full `OpportunityScore.as_dict()` remains an internal/debug comparison and should not be exposed by the command center.
+
+### Privacy and factor-explanation safety
+
+The future API must never include ActorProfile demographics, private notes, raw career goals, dream-target or watch-list notes, recommendation-feedback notes, raw trust/source metadata, provider evidence, fetched content, scoring context, ranking/canonical keys, database IDs beyond the existing card ID, `as_of`, stack traces, or validation errors.
+
+Current operational templates are safe for actor-facing exposure because they contain no source values: parsed-role fit; remote/local/travel/housing/compensation/deadline facts; parser/trust/source/completeness bands; and generic watch-list priority. Demographic, preferred-role, union, and language factor IDs/templates are safe only under an explicitly actor-facing privacy policy because they reveal the existence or result of sensitive matching even though they do not reveal the underlying profile value. The current `career.goal.active_match`, `career.dream_target.match`, and `career.stretch.strategic` explanations interpolate user-controlled labels and must be redacted, replaced by approved generic prose, or omitted. Feedback factor explanations encode a private actor choice and should likewise omit prose or use a generic actor-authorized explanation. Public contributor serialization therefore requires an explicit factor allowlist; deterministic prose alone is not sufficient evidence of safety.
+
+### Frontend, accessibility, and compatibility requirements
+
+The eventual card should communicate numeric score and a text action label without relying on color. Contributor disclosure must be keyboard operable, must not be tooltip-only, and must expose descriptive screen-reader text such as “Opportunity intelligence score 87 of 100; Apply Now.” Hard overrides need a text reason and may not appear as a generic failure. Absent intelligence renders the existing card unchanged; neutral intelligence states that evaluation completed but no strong contributors were found. Unsupported versions degrade to the absent presentation. Mobile cards must preserve role/project and action before optional contributor details. Loading remains owned by the existing command-center request; no second spinner or request is introduced. Partial intelligence absence must not suppress or reorder an otherwise usable card.
+
+Backward compatibility requires old responses to keep rendering, new optional projections to be ignored by old frontend code, missing/`null` projections to preserve ranked order, unsupported versions to degrade safely, strict mocks to remain valid until deliberately updated, and an OpenAPI diff containing only additive nested definitions/fields. No route or existing field may be removed.
+
+### Required implementation test matrix
+
+Backend contract tests must cover evaluated summary, absent and explicit-null intelligence, neutral baseline, each hard override, retained duplicate, every tracked status, maximum contributors, version serialization, unknown-version documentation, privacy sentinels, payload bounds, unchanged card fields, and an additive-only OpenAPI diff. Backend unit tests must verify public factor allowlisting/redaction and prove serialization does not mutate scores or ORM records.
+
+Frontend unit tests must cover all six actions, score bounds, contributor disclosure, hard override, absent and neutral fallback, unsupported version, color-independent and screen-reader labels, keyboard disclosure, mobile-safe content order, and old fixtures against updated optional types. Playwright must use the same single `GET /command-center` request to cover a populated projection, absent-field compatibility, retained backend order, and strict unknown-request rejection. Compatibility tests must run the old frontend fixture against the new optional backend schema, the old response fixture against updated TypeScript types, and assert that OpenAPI changes are additive only.
+
 ## Deferred phases
 
 - Define an API response only after a real consumer is selected.
