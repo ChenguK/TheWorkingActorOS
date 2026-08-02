@@ -23,7 +23,10 @@ def item(**overrides) -> NormalizedOpportunity:
             "source_url": "https://public.example.test/notices/river-city-maya",
         },
         "production_details": {"project_type": "Feature Film"},
-        "role_details": {"language_requirements": "English"},
+        "role_details": {
+            "language_requirements": "English",
+            "submission_deadline": "December 1, 2035",
+        },
     }
     values.update(overrides)
     return NormalizedOpportunity(**values)
@@ -57,8 +60,8 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
         "hidden_reason",
         "was_created",
         "expected_result",
-        "expected_decision",
-        "expected_reason",
+        "expected_outcome",
+        "expected_reason_code",
     ),
     [
         (
@@ -74,8 +77,8 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
                 "discarded": 0,
                 "rejected": 0,
             },
-            "Accepted",
-            None,
+            "accept_visible",
+            "direct_eligible_notice",
         ),
         (
             "hidden",
@@ -88,10 +91,10 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
                 "hidden": 1,
                 "travel_exceptions": 0,
                 "discarded": 0,
-                "rejected": 1,
+                "rejected": 0,
             },
-            "Rejected",
-            "needs_date_review",
+            "review_hidden",
+            "missing_deadline",
         ),
         (
             "travel_exception",
@@ -106,8 +109,8 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
                 "discarded": 0,
                 "rejected": 0,
             },
-            "Rejected",
-            "Travel restriction",
+            "review_hidden",
+            "travel_exception_review",
         ),
         (
             "discarded",
@@ -122,8 +125,8 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
                 "discarded": 1,
                 "rejected": 1,
             },
-            "Rejected",
-            "dealbreaker_demographic_mismatch",
+            "reject_discarded",
+            "hard_demographic_mismatch",
         ),
         (
             "visible",
@@ -138,8 +141,8 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
                 "discarded": 0,
                 "rejected": 0,
             },
-            "Rejected",
-            "Duplicate",
+            "reject_discarded",
+            "duplicate_candidate",
         ),
     ],
 )
@@ -149,8 +152,8 @@ def test_current_public_web_routing_matrix(
     hidden_reason,
     was_created,
     expected_result,
-    expected_decision,
-    expected_reason,
+    expected_outcome,
+    expected_reason_code,
 ):
     service = DiscoveryAutomationService(db=None)
     opportunity = SimpleNamespace(
@@ -168,8 +171,8 @@ def test_current_public_web_routing_matrix(
 
     for key, value in expected_result.items():
         assert routing[key] == value
-    assert summary["candidate_reports"][0]["decision"] == expected_decision
-    assert summary["candidate_reports"][0]["rejection_reason"] == expected_reason
+    assert summary["candidate_reports"][0]["outcome"] == expected_outcome
+    assert summary["candidate_reports"][0]["reason_code"] == expected_reason_code
     assert summary["candidate_reports"][0]["parser_confidence"] == (
         68 if visibility == "hidden" else 82
     )
@@ -193,10 +196,11 @@ def test_current_expired_result_is_rejected_before_persistence():
     assert routing["rejected"] == 1
     assert routing["rejection_reasons_summary"]["deadline_expired"] == 1
     assert summary["candidate_reports"][0]["decision"] == "Rejected"
-    assert summary["candidate_reports"][0]["rejection_reason"] == "Expired"
+    assert summary["candidate_reports"][0]["outcome"] == "reject_discarded"
+    assert summary["candidate_reports"][0]["reason_code"] == "expired_notice"
 
 
-def test_current_ambiguous_normalized_result_has_no_medium_confidence_review_policy():
+def test_ambiguous_medium_confidence_result_routes_to_hidden_review():
     ambiguous = item(
         role="Performer",
         project="Casting Advice Article",
@@ -221,13 +225,12 @@ def test_current_ambiguous_normalized_result_has_no_medium_confidence_review_pol
         result(ambiguous), "FilmTV", None, ["Match My Profile"], None
     )
 
-    assert routing["visible"] == 1
-    assert routing["hidden"] == 0
-    assert summary["candidate_reports"][0] == {
-        "page_title": "Casting Advice Article",
-        "url": "https://news.example.test/articles/casting-advice",
-        "source": "Parallel Public Web Search",
-        "decision": "Accepted",
-        "rejection_reason": None,
-        "parser_confidence": 55,
-    }
+    assert routing["visible"] == 0
+    assert routing["hidden"] == 1
+    assert opportunity.visibility_status == "hidden"
+    candidate = summary["candidate_reports"][0]
+    assert candidate["decision"] == "Needs Review"
+    assert candidate["outcome"] == "review_hidden"
+    assert candidate["reason_code"] == "medium_parse_confidence"
+    assert candidate["parser_confidence"] == 55
+    assert candidate["rejection_reason"] is None

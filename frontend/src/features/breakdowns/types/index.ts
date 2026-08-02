@@ -71,6 +71,10 @@ export type DiscoveryCandidateReport = {
     published_date?: string;
   } | null;
   decision?: "Accepted" | "Rejected" | "Parsed" | string;
+  outcome?: "accept_visible" | "review_hidden" | "reject_discarded" | string;
+  reason_code?: string | null;
+  explanation?: string | null;
+  supporting_reason_codes?: string[];
   rejection_reason?: string | null;
   parser_confidence?: number | null;
 };
@@ -81,6 +85,7 @@ export type DiscoveryReport = {
   candidate_pages_fetched: number;
   candidate_pages_parsed: number;
   accepted: number;
+  reviewed?: number;
   rejected: number;
   top_rejection_reasons: Record<string, number>;
   average_parser_confidence?: number | null;

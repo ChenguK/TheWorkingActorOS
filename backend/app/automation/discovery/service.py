@@ -12,6 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.automation.discovery.classification import REJECTED_CLASSIFICATIONS
 from app.automation.discovery.contracts import DiscoveryProvider, NormalizedOpportunity
+from app.automation.discovery.decision_policy import (
+    PublicDiscoveryDecision,
+    PublicDiscoveryDecisionPolicy,
+    PublicDiscoveryOutcome,
+)
 from app.automation.discovery.registry import DiscoveryPluginRegistry
 from app.db.models import (
     ActorProfile,
@@ -89,6 +94,7 @@ class DiscoveryAutomationService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.registry = DiscoveryPluginRegistry()
+        self.public_decision_policy = PublicDiscoveryDecisionPolicy()
 
     def list_plugins(self) -> list[dict]:
         self._sync_plugins()
@@ -571,25 +577,50 @@ class DiscoveryAutomationService:
         eligible_added = 0
         suggested_sources = 0
         for item in search_result.normalized:
-            candidate_report = self._candidate_report_for_url(summary["candidate_reports"], item.original_post_url)
+            candidate_report = self._candidate_report_for_url(
+                summary["candidate_reports"], item.original_post_url
+            )
             if visible_limit is not None and visible >= visible_limit:
-                self._mark_candidate_report(candidate_report, "Rejected", "Visible result limit reached")
+                self._mark_candidate_decision(
+                    candidate_report,
+                    self.public_decision_policy.reject(
+                        "visible_limit_reached",
+                        "The configured visible-result limit was reached.",
+                    ),
+                )
                 break
             if not self._matches_mode(item, discovery_mode):
                 rejected += 1
                 rejection_summary["mode_mismatch"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", "Project type mismatch")
+                self._mark_candidate_decision(
+                    candidate_report,
+                    self.public_decision_policy.reject(
+                        "irrelevant_project_mode",
+                        "The candidate does not match the requested project mode.",
+                    ),
+                )
                 continue
             if not self._matches_search_intent(item, search_modes, specific_archetype):
                 rejected += 1
                 rejection_summary["search_intent_mismatch"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", "Search intent mismatch")
+                self._mark_candidate_decision(
+                    candidate_report,
+                    self.public_decision_policy.reject(
+                        "irrelevant_search_intent",
+                        "The candidate does not match the requested search intent.",
+                    ),
+                )
                 continue
             date_result = BreakdownDeadlineService().validate_normalized(item)
             if date_result.expired:
                 rejected += 1
                 rejection_summary["deadline_expired"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", "Expired")
+                self._mark_candidate_decision(
+                    candidate_report,
+                    self.public_decision_policy.reject(
+                        "expired_notice", "The candidate deadline has expired."
+                    ),
+                )
                 continue
             if date_result.needs_review:
                 rejection_summary["needs_date_review"] += 1
@@ -609,30 +640,62 @@ class DiscoveryAutomationService:
                 candidate_report["parser_confidence"] = parse_confidence
             if was_created:
                 created += 1
-            if opportunity.visibility_status == "visible":
+            decision = self.public_decision_policy.decide(item, opportunity)
+            if not was_created:
+                decision = self.public_decision_policy.reject(
+                    "duplicate_candidate",
+                    "The candidate reuses an existing opportunity identity.",
+                )
+            elif decision.outcome is PublicDiscoveryOutcome.REVIEW_HIDDEN:
+                if opportunity.visibility_status != "travel_exception":
+                    opportunity.visibility_status = "hidden"
+                    opportunity.hidden_by_rule = decision.reason_code
+                    opportunity.hidden_reason = decision.explanation
+                    opportunity.manual_review_required = True
+            elif decision.outcome is PublicDiscoveryOutcome.REJECT_DISCARDED:
+                opportunity.visibility_status = "discarded"
+                opportunity.hidden_by_rule = decision.reason_code
+                opportunity.hidden_reason = decision.explanation
+                opportunity.rejection_reason = decision.explanation
+                opportunity.manual_review_required = False
+            self._mark_candidate_decision(candidate_report, decision)
+
+            if not was_created:
+                if opportunity.visibility_status == "visible":
+                    visible += 1
+                elif opportunity.visibility_status == "travel_exception":
+                    travel_exceptions += 1
+                elif opportunity.visibility_status == "discarded":
+                    discarded += 1
+                    rejected += 1
+                else:
+                    hidden += 1
+                rejection_summary["duplicate"] += 1
+            elif decision.outcome is PublicDiscoveryOutcome.ACCEPT_VISIBLE:
                 visible += 1
-                self._mark_candidate_report(candidate_report, "Accepted", None)
                 if was_created:
                     eligible_added += 1
                 if was_created and self._suggest_source_from_public_breakdown(opportunity):
                     suggested_sources += 1
-            elif opportunity.visibility_status == "travel_exception":
+            elif (
+                decision.outcome is PublicDiscoveryOutcome.REVIEW_HIDDEN
+                and opportunity.visibility_status == "travel_exception"
+            ):
                 travel_exceptions += 1
                 rejection_summary["travel_exception"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", "Travel restriction")
-            elif opportunity.visibility_status == "discarded":
+            elif decision.outcome is PublicDiscoveryOutcome.REVIEW_HIDDEN:
+                hidden += 1
+                rejection_summary["hidden"] += 1
+                rejection_summary[decision.reason_code] = (
+                    rejection_summary.get(decision.reason_code, 0) + 1
+                )
+            else:
                 discarded += 1
                 rejected += 1
                 rejection_summary["discarded"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", self._plain_rejection_reason(opportunity.hidden_by_rule or opportunity.hidden_reason or "discarded"))
-            else:
-                hidden += 1
-                rejected += 1
-                rejection_summary["hidden"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", self._plain_rejection_reason(opportunity.hidden_by_rule or opportunity.hidden_reason or "Unknown"))
-            if not was_created:
-                rejection_summary["duplicate"] += 1
-                self._mark_candidate_report(candidate_report, "Rejected", "Duplicate")
+                rejection_summary[decision.reason_code] = (
+                    rejection_summary.get(decision.reason_code, 0) + 1
+                )
 
         result = {
             "source": "Parallel Public Web Search",
@@ -660,51 +723,30 @@ class DiscoveryAutomationService:
                 return report
         return None
 
-    def _mark_candidate_report(self, report: dict | None, decision: str, reason: str | None) -> None:
-        if report is None:
-            return
-        report["decision"] = decision
-        report["rejection_reason"] = reason
-
-    def _plain_rejection_reason(self, reason: str | None) -> str:
-        if not reason:
-            return "Unknown"
-        value = str(reason).lower()
-        if "expired" in value or "deadline" in value:
-            return "Expired"
-        if "background" in value or "extra" in value:
-            return "Background/Extra"
-        if "crew" in value or "staff" in value or "job" in value:
-            return "Crew/Staff"
-        if "workshop" in value or "class" in value:
-            return "Workshop/Class"
-        if "gender" in value:
-            return "Wrong gender"
-        if "age" in value:
-            return "Wrong age"
-        if "ethnicity" in value or "race" in value:
-            return "Wrong ethnicity"
-        if "travel" in value:
-            return "Travel restriction"
-        if "acting" in value or "performer" in value:
-            return "Not an acting role"
-        if "role block" in value:
-            return "No role blocks detected"
-        if "confidence" in value:
-            return "Low parser confidence"
-        if "duplicate" in value:
-            return "Duplicate"
-        if "submitted" in value:
-            return "Already submitted"
-        return str(reason)
+    def _mark_candidate_decision(
+        self, report: dict | None, decision: PublicDiscoveryDecision
+    ) -> None:
+        if report is not None:
+            report.update(decision.as_report_fields())
 
     def _discovery_report(self, results: list[dict], public_web_summary: dict) -> dict:
         candidates = list(public_web_summary.get("candidate_reports") or [])
-        accepted = [item for item in candidates if item.get("decision") == "Accepted"]
-        rejected = [item for item in candidates if item.get("decision") == "Rejected"]
+        accepted = [
+            item
+            for item in candidates
+            if item.get("outcome") == "accept_visible"
+            or (not item.get("outcome") and item.get("decision") == "Accepted")
+        ]
+        reviewed = [item for item in candidates if item.get("outcome") == "review_hidden"]
+        rejected = [
+            item
+            for item in candidates
+            if item.get("outcome") == "reject_discarded"
+            or (not item.get("outcome") and item.get("decision") == "Rejected")
+        ]
         rejection_counts: dict[str, int] = {}
         for item in rejected:
-            reason = item.get("rejection_reason") or "Unknown"
+            reason = item.get("explanation") or item.get("rejection_reason") or "Unknown"
             rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
         confidences = [
             item.get("parser_confidence")
@@ -717,10 +759,15 @@ class DiscoveryAutomationService:
             "candidate_pages_fetched": public_web_summary.get("candidate_pages_fetched", 0),
             "candidate_pages_parsed": public_web_summary.get("candidate_pages_parsed", 0),
             "accepted": len(accepted),
+            "reviewed": len(reviewed),
             "rejected": len(rejected),
             "top_rejection_reasons": rejection_counts,
-            "average_parser_confidence": round(sum(confidences) / len(confidences), 1) if confidences else None,
-            "approved_source_hits": sum(item.get("total_found", 0) for item in results if not item.get("public_web_search")),
+            "average_parser_confidence": round(sum(confidences) / len(confidences), 1)
+            if confidences
+            else None,
+            "approved_source_hits": sum(
+                item.get("total_found", 0) for item in results if not item.get("public_web_search")
+            ),
             "public_web_hits": public_web_summary.get("candidate_pages_found", 0),
             "candidates": candidates,
         }

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from app.automation.discovery.classification import classify_breakdown_text
 from app.automation.discovery.contracts import NormalizedOpportunity
+from app.automation.discovery.decision_policy import PublicDiscoveryDecisionPolicy
 from app.automation.discovery.public_content_fetch import (
     PUBLIC_CONTENT_MAX_VISIBLE_TEXT_LENGTH,
     PublicContentFetchOutcome,
@@ -108,6 +109,7 @@ class PublicWebBreakdownSearch:
         self.settings = get_settings()
         self._parallel_client = parallel_client
         self._content_fetcher = content_fetcher or PublicContentFetcher()
+        self._decision_policy = PublicDiscoveryDecisionPolicy()
 
     def configured(self) -> bool:
         return (
@@ -171,7 +173,11 @@ class PublicWebBreakdownSearch:
                 rejected += 1
                 rejection_reasons["fetch_failed"] += 1
                 report["fetch_outcome"] = fetch_result.outcome.value
-                report["rejection_reason"] = fetch_result.message
+                report.update(
+                    self._decision_policy.reject(
+                        f"fetch_{fetch_result.outcome.value}", fetch_result.message
+                    ).as_report_fields()
+                )
                 candidate_reports.append(report)
                 continue
             page_text = fetch_result.text or ""
@@ -183,7 +189,19 @@ class PublicWebBreakdownSearch:
             else:
                 rejected += 1
                 rejection_reasons["not_actor_facing_breakdown"] += 1
-                report["rejection_reason"] = "Not an acting role"
+                classification = classify_breakdown_text(page_text).classification
+                reason_code = (
+                    "crew_or_staff_listing"
+                    if classification == "Crew Job"
+                    else "non_acting_job"
+                    if classification == "Non-Acting Job"
+                    else "malformed_or_unusable_candidate"
+                )
+                report.update(
+                    self._decision_policy.reject(
+                        reason_code, "The candidate is not an actor-facing role notice."
+                    ).as_report_fields()
+                )
             candidate_reports.append(report)
         self._debug_log(
             "Parallel public web search filtering summary",

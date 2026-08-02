@@ -148,6 +148,9 @@ describe("AutomationDashboard discovery state", () => {
           url: "https://casting.example.test/uncanonical#fragment",
           source: "Parallel Public Web Search",
           decision: "Accepted",
+          outcome: "accept_visible",
+          reason_code: "direct_eligible_notice",
+          explanation: "Direct actionable acting notice passed current eligibility and trust checks.",
           rejection_reason: null,
           provider_evidence: {
             provider: "Parallel",
@@ -174,6 +177,49 @@ describe("AutomationDashboard discovery state", () => {
     expect(screen.getByText("Search provider: Parallel")).toBeInTheDocument();
     expect(screen.getByText(/A provider-supplied summary/)).toBeInTheDocument();
     expect(screen.getByText(/Provider publication date: 2026-08-01/)).toBeInTheDocument();
+    expect(screen.getByText(/Direct actionable acting notice/)).toBeInTheDocument();
+    expect(screen.getByText(/direct_eligible_notice/)).toBeInTheDocument();
+  });
+
+  it("distinguishes hidden review from discarded rejection", async () => {
+    const resultWithDecisions: DiscoveryRunResult = {
+      ...discoveryResult,
+      discovery_report: {
+        ...discoveryResult.discovery_report!,
+        reviewed: 1,
+        candidates: [
+          {
+            page_title: "Reviewable role",
+            decision: "Needs Review",
+            outcome: "review_hidden",
+            reason_code: "medium_parse_confidence",
+            explanation: "Parse confidence is below the 70% visible threshold."
+          },
+          {
+            page_title: "Crew listing",
+            decision: "Rejected",
+            outcome: "reject_discarded",
+            reason_code: "crew_or_staff_listing",
+            explanation: "The candidate is not an actor-facing role notice."
+          }
+        ]
+      }
+    };
+    vi.mocked(useBreakdownDiscovery).mockReturnValue({
+      discovering: false,
+      error: null,
+      clearError: vi.fn(),
+      run: vi.fn(async () => resultWithDecisions)
+    });
+    const { user } = renderDashboard();
+
+    await user.click(screen.getByRole("button", { name: "Find Film/TV Breakdowns" }));
+    await user.click(await screen.findByRole("button", { name: "View Discovery Report" }));
+
+    expect(screen.getByText("Needs Review")).toBeInTheDocument();
+    expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
+    expect(screen.getByText(/below the 70% visible threshold/)).toBeInTheDocument();
+    expect(screen.getByText(/not an actor-facing role notice/)).toBeInTheDocument();
   });
 
   it("renders provider text inertly and hides absent optional evidence labels", async () => {

@@ -81,8 +81,12 @@ function DiscoveryCandidateCard({ candidate }: { candidate: DiscoveryCandidateRe
         <p className="mt-1 text-slate-500">Provider publication date: {evidence.published_date}</p>
       )}
       <p className="mt-1">
-        <span className="font-semibold">Reason:</span> {candidate.rejection_reason || "Accepted"}
+        <span className="font-semibold">Reason:</span>{" "}
+        {candidate.explanation || candidate.rejection_reason || "Direct eligible notice"}
       </p>
+      {candidate.reason_code && (
+        <p className="mt-1 text-slate-500">Decision code: {candidate.reason_code}</p>
+      )}
       {candidate.parser_confidence != null && (
         <p className="mt-1 text-slate-500">Parser confidence: {candidate.parser_confidence}%</p>
       )}

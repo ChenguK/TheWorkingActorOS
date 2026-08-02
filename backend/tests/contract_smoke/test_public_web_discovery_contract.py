@@ -15,9 +15,12 @@ def _direct_notice():
         union="SAG-AFTRA",
         location="New York, NY",
         description=(
-            "Project: River City\nRole: Maya, Supporting, Black woman, ages 25-40. "
-            "English language SAG-AFTRA feature film. Self-tape audition. "
-            "Submission deadline: December 31, 2099."
+            "Production Details\nProject: River City\nProject Type: Feature Film\n"
+            "Union: SAG-AFTRA\nLocation: New York, NY\n\n"
+            "Audition Information\nSelf-tape audition with virtual callback.\n\n"
+            "Roles\nMaya (Supporting)\nBlack woman, ages 25-40, who speaks English. "
+            "Maya is a determined public defender leading a feature-film drama.\n\n"
+            "Submission Instructions\nSubmit headshot and resume by December 31, 2099."
         ),
         original_post_url="https://one-off.example.test/notices/river-city-maya",
         audition_type="Self-Tape",
@@ -104,6 +107,8 @@ def test_current_one_off_result_is_pending_without_domain_approval_or_public_web
     source = db.scalar(select(SourceResearchItem))
     assert routing["created"] == 1
     assert routing["visible"] == 1
+    assert summary["candidate_reports"][0]["outcome"] == "accept_visible"
+    assert summary["candidate_reports"][0]["reason_code"] == "direct_eligible_notice"
     assert summary["candidate_reports"][0]["decision"] == "Accepted"
     assert opportunity is not None
     assert opportunity.visibility_status == "visible"
@@ -114,7 +119,7 @@ def test_current_one_off_result_is_pending_without_domain_approval_or_public_web
     assert "page_title" not in opportunity.source_metadata
     assert "excerpt" not in opportunity.source_metadata
     assert opportunity.demographic_match_status == "Match"
-    assert "No explicit demographic mismatch" in opportunity.demographic_match_explanation
+    assert "strong match" in opportunity.demographic_match_explanation
     assert source is not None
     assert source.status == "Suggested"
     assert source.approved_by_user is False
@@ -138,6 +143,7 @@ def test_current_duplicate_identity_reuses_opportunity_and_does_not_merge_eviden
     from app.automation.discovery.service import DiscoveryAutomationService
     from app.db.models import Opportunity, SourceResearchItem
 
+    _configured_actor(db)
     service = DiscoveryAutomationService(db)
     first_summary, first = service._process_public_web_search_result(
         _search_result(_direct_notice()), "FilmTV", None, ["Match My Profile"], None
@@ -155,7 +161,8 @@ def test_current_duplicate_identity_reuses_opportunity_and_does_not_merge_eviden
     assert second["created"] == 0
     assert second["rejection_reasons_summary"]["duplicate"] == 1
     assert second_summary["candidate_reports"][0]["decision"] == "Rejected"
-    assert second_summary["candidate_reports"][0]["rejection_reason"] == "Duplicate"
+    assert second_summary["candidate_reports"][0]["outcome"] == "reject_discarded"
+    assert second_summary["candidate_reports"][0]["reason_code"] == "duplicate_candidate"
     assert db.scalar(select(func.count()).select_from(Opportunity)) == 1
     assert db.scalar(select(func.count()).select_from(SourceResearchItem)) == 1
     assert opportunity.source_metadata.get("source_url") == opportunity.original_post_url
