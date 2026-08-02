@@ -113,6 +113,9 @@ def test_opportunity_create_synchronous_contract(client, db):
     assert client.get(f"{API}/intelligence/materials/performance").json() == before_material_performance
     assert client.get(f"{API}/operations/dashboard").json() == before_operations
 
+    self_tape_due_at = (datetime.now(timezone.utc) + timedelta(days=7)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
     self_tape_response = client.post(
         f"{API}/opportunities",
         json={
@@ -120,11 +123,14 @@ def test_opportunity_create_synchronous_contract(client, db):
             "project": "Tape Pilot",
             "union": "SAG-AFTRA",
             "location": "New York, NY",
-            "description": "Television drama. Detective, guest star. Self-tape due July 30, 2026 at 6 PM ET.",
+            "description": (
+                "Television drama. Detective, guest star. Self-tape due "
+                f"{self_tape_due_at.strftime('%B %d, %Y')} at 6 PM UTC."
+            ),
             "project_type": "Television",
             "role_type": "Guest Star",
             "audition_type": "Self-Tape",
-            "audition_deadline": "2026-07-30T18:00:00-04:00",
+            "audition_deadline": self_tape_due_at.isoformat(),
         },
     )
     assert self_tape_response.status_code == 201, self_tape_response.text
@@ -132,9 +138,7 @@ def test_opportunity_create_synchronous_contract(client, db):
     workflows = db.scalars(select(SelfTapeWorkflow).where(SelfTapeWorkflow.opportunity_id == self_tape_id)).all()
     assert len(workflows) == 1
     assert workflows[0].submission_id is None
-    assert workflows[0].tape_due_at == datetime.fromisoformat(
-    "2026-07-30T18:00:00-04:00"
-)
+    assert workflows[0].tape_due_at == self_tape_due_at
     calendar = db.scalars(select(AuditionCalendarEvent).where(AuditionCalendarEvent.opportunity_id == self_tape_id)).all()
     assert len(calendar) == 1 and calendar[0].event_type == "Self-Tape Due"
     assert client.get(f"{API}/operations/dashboard").json() != before_operations
