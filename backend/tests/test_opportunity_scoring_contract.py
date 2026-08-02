@@ -277,6 +277,11 @@ def test_exact_serialization_contract_is_stable():
         "explanation": {
             "summary": "No detailed scoring factors apply yet; the score remains at the baseline."
         },
+        "suggested_action": {
+            "action": "low_priority",
+            "reason_code": "limited_current_value",
+            "explanation": "This opportunity is eligible but currently has limited strategic or practical value.",
+        },
     }
 
 
@@ -305,6 +310,8 @@ def test_proven_hard_overrides_return_zero_without_mutation(overrides, expected_
     assert result.overall_score == 0
     assert result.hard_override is True
     assert result.hard_override_reason == expected_reason
+    assert result.suggested_action.action.value == "ignore"
+    assert result.suggested_action.reason_code == "hard_override"
     assert result.explanation.summary
     assert opportunity_snapshot(item) == before
 

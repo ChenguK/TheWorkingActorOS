@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 import math
@@ -35,6 +35,15 @@ class ScoreCategory(str, Enum):
     PRACTICALITY = "practicality"
     CONFIDENCE = "confidence"
     ACTOR_INTEREST = "actor_interest"
+
+
+class SuggestedAction(str, Enum):
+    IGNORE = "ignore"
+    SAVE_FOR_LATER = "save_for_later"
+    GOOD_STRETCH_ROLE = "good_stretch_role"
+    APPLY_NOW = "apply_now"
+    REVIEW_TODAY = "review_today"
+    LOW_PRIORITY = "low_priority"
 
 
 SCORE_CATEGORY_ORDER = (
@@ -333,6 +342,50 @@ class ScoreExplanation:
 
 
 @dataclass(frozen=True)
+class SuggestedActionResult:
+    action: SuggestedAction
+    reason_code: str
+    explanation: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, SuggestedAction):
+            raise ValueError("suggested action is unsupported")
+        _require_plain_text(self.reason_code, field_name="action reason code", maximum=80)
+        if not _FACTOR_ID_PATTERN.fullmatch(self.reason_code):
+            raise ValueError("action reason code must be machine-readable")
+        _require_plain_text(
+            self.explanation,
+            field_name="action explanation",
+            maximum=MAX_SCORE_EXPLANATION_LENGTH,
+        )
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "action": self.action.value,
+            "reason_code": self.reason_code,
+            "explanation": self.explanation,
+        }
+
+
+@dataclass(frozen=True)
+class OpportunityActionContext:
+    is_duplicate: bool = False
+    visibility_status: str = "visible"
+    submission_status: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.is_duplicate, bool):
+            raise ValueError("duplicate state must be boolean")
+        if self.visibility_status not in {"visible", "hidden", "travel_exception", "discarded"}:
+            raise ValueError("visibility status is unsupported")
+        if (
+            self.submission_status is not None
+            and self.submission_status not in _ALLOWED_SUBMISSION_STATUSES
+        ):
+            raise ValueError("submission status is unsupported")
+
+
+@dataclass(frozen=True)
 class OpportunityScore:
     opportunity_id: str
     scoring_version: int
@@ -345,6 +398,7 @@ class OpportunityScore:
     hard_override_reason: str | None
     confidence: ScoreConfidence
     explanation: ScoreExplanation
+    suggested_action: SuggestedActionResult
 
     def as_dict(self) -> dict:
         return {
@@ -359,6 +413,7 @@ class OpportunityScore:
             "hard_override_reason": self.hard_override_reason,
             "confidence": self.confidence.as_dict(),
             "explanation": self.explanation.as_dict(),
+            "suggested_action": self.suggested_action.as_dict(),
         }
 
 
@@ -405,6 +460,11 @@ def build_opportunity_score(
                 summary="Detailed confidence factors were not evaluated because a proven hard eligibility override applies.",
             ),
             explanation=ScoreExplanation(summary=override_explanation),
+            suggested_action=_action_result(
+                SuggestedAction.IGNORE,
+                "hard_override",
+                "This opportunity has a hard eligibility or status blocker.",
+            ),
         )
 
     total = OPPORTUNITY_SCORE_BASELINE + sum(category.capped_subtotal for category in categories)
@@ -429,6 +489,11 @@ def build_opportunity_score(
                 if ordered_factors
                 else "No detailed scoring factors apply yet; the score remains at the baseline."
             )
+        ),
+        suggested_action=_action_result(
+            SuggestedAction.LOW_PRIORITY,
+            "limited_current_value",
+            "This opportunity is eligible but currently has limited strategic or practical value.",
         ),
     )
 
@@ -478,10 +543,126 @@ def score_opportunity(
             *_actor_interest_factors(context),
         )
     )
-    return build_opportunity_score(
+    completed_score = build_opportunity_score(
         opportunity_id=str(opportunity.id),
         factors=factors,
         hard_override_reason=override,
+    )
+    return replace(
+        completed_score,
+        suggested_action=suggest_opportunity_action(
+            completed_score,
+            OpportunityActionContext(
+                is_duplicate=opportunity.is_duplicate,
+                visibility_status=opportunity.visibility_status,
+                submission_status=context.submission_status,
+            ),
+        ),
+    )
+
+
+def suggest_opportunity_action(
+    score: OpportunityScore,
+    context: OpportunityActionContext,
+) -> SuggestedActionResult:
+    if not isinstance(score, OpportunityScore):
+        raise ValueError("score must be an OpportunityScore")
+    if not isinstance(context, OpportunityActionContext):
+        raise ValueError("context must be an OpportunityActionContext")
+    if score.hard_override:
+        return _action_result(
+            SuggestedAction.IGNORE,
+            "hard_override",
+            "This opportunity has a hard eligibility or status blocker.",
+        )
+    if context.is_duplicate:
+        return _action_result(
+            SuggestedAction.IGNORE,
+            "duplicate_opportunity",
+            "This retained duplicate should not be acted on independently.",
+        )
+    if context.submission_status is not None:
+        return _action_result(
+            SuggestedAction.SAVE_FOR_LATER,
+            "already_tracked",
+            "This opportunity is already tracked and should not prompt another application.",
+        )
+
+    factor_ids = {factor.id for category in score.categories for factor in category.factors}
+    if score.overall_score >= 65 and "match.role_fit.stretch" in factor_ids:
+        return _action_result(
+            SuggestedAction.GOOD_STRETCH_ROLE,
+            "strategic_stretch",
+            "This is a strategically supported stretch role with a competitive score.",
+        )
+
+    within_seven_days = bool(
+        factor_ids
+        & {
+            "practicality.deadline.within_24h",
+            "practicality.deadline.within_72h",
+            "practicality.deadline.within_7d",
+        }
+    )
+    within_72_hours = bool(
+        factor_ids
+        & {
+            "practicality.deadline.within_24h",
+            "practicality.deadline.within_72h",
+        }
+    )
+    if (
+        score.overall_score >= 85
+        and score.confidence.level != "Low"
+        and within_seven_days
+        and context.visibility_status == "visible"
+    ):
+        return _action_result(
+            SuggestedAction.APPLY_NOW,
+            "high_priority_actionable",
+            "This visible opportunity has a high score, sufficient confidence, and a near deadline.",
+        )
+    if score.overall_score >= 70:
+        return _action_result(
+            SuggestedAction.REVIEW_TODAY,
+            "strong_score_review",
+            "This opportunity deserves review today based on its score.",
+        )
+    if within_72_hours:
+        return _action_result(
+            SuggestedAction.REVIEW_TODAY,
+            "urgent_deadline_review",
+            "This opportunity deserves review today because its deadline is near.",
+        )
+    deadline_is_missing_or_distant = bool(
+        factor_ids
+        & {
+            "practicality.deadline.missing",
+            "practicality.deadline.distant",
+        }
+    )
+    if score.overall_score >= 55 and deadline_is_missing_or_distant:
+        return _action_result(
+            SuggestedAction.SAVE_FOR_LATER,
+            "promising_not_urgent",
+            "This promising opportunity does not require action within seven days.",
+        )
+    return _action_result(
+        SuggestedAction.LOW_PRIORITY,
+        "limited_current_value",
+        "This opportunity is eligible but currently has limited strategic or practical value.",
+    )
+
+
+def _action_result(
+    action: SuggestedAction,
+    reason_code: str,
+    explanation: str,
+) -> SuggestedActionResult:
+    return SuggestedActionResult(
+        action=action,
+        reason_code=reason_code,
+        explanation=explanation,
     )
 
 

@@ -142,17 +142,21 @@ Explanations use fixed templates, for example: `Strong Fit is the best parsed ro
 
 ## 7. Suggested actions
 
-Apply the following first-match-wins rules after hard overrides:
+The allowed serialized values are `ignore`, `save_for_later`, `good_stretch_role`, `apply_now`, `review_today`, and `low_priority`. Selection interprets one completed score; it does not recalculate factors.
 
-1. **Ignore** — hard override, or retained canonical duplicate exists.
-2. **Save for Later** — already submitted/booked/tracked; scoring may explain value but must not invite another application.
-3. **Good Stretch Role** — score at least 65, best role fit is Stretch Fit, and no hard blocker exists.
-4. **Apply Now** — score at least 85, confidence is not Low, actionable deadline is within seven days, and the opportunity is visible.
-5. **Review Today** — score at least 70, or an actionable deadline is within 72 hours, and no earlier rule applies.
-6. **Save for Later** — score at least 55 and deadline is more than seven days away or absent.
-7. **Low Priority** — all other eligible opportunities.
+Apply these first-match-wins rules:
 
-The order intentionally lets an urgent but incomplete record say Review Today rather than Apply Now. Actions do not submit, hide, delete, or change priority.
+1. **Ignore** (`hard_override`) — the completed score has an authoritative hard override.
+2. **Ignore** (`duplicate_opportunity`) — `Opportunity.is_duplicate` is explicitly true.
+3. **Save for Later** (`already_tracked`) — context contains any persisted Submission status: Submitted, Requested, Self-Tape Callback, In-Person Callback, Pinned, Booked, Passed, or No Response.
+4. **Good Stretch Role** (`strategic_stretch`) — score is at least 65 and the completed factor set identifies Stretch Fit as the deterministic best role.
+5. **Apply Now** (`high_priority_actionable`) — score is at least 85, confidence is not Low, the completed deadline factor is within seven days, and visibility is `visible`.
+6. **Review Today** (`strong_score_review`) — score is at least 70.
+7. **Review Today** (`urgent_deadline_review`) — the completed deadline factor is within 72 hours.
+8. **Save for Later** (`promising_not_urgent`) — score is at least 55 and the completed deadline factor is missing or more than seven days away.
+9. **Low Priority** (`limited_current_value`) — all other eligible opportunities.
+
+Thresholds are inclusive. Score-based Review Today wins when score and deadline review both apply. Hidden and travel-exception records cannot receive Apply Now but remain reviewable; discarded visibility is already a hard override. Low confidence blocks only Apply Now. Actions are advisory and never submit, save, pin, hide, reject, archive, delete, persist, or trigger another workflow.
 
 ## 8. Architecture
 
