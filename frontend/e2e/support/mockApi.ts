@@ -16,6 +16,7 @@ export type MockState = {
   actorJournal: Array<Record<string, unknown>>;
   assets: Array<Record<string, unknown>>;
   capabilities: Record<string, unknown>;
+  discoveryResult: Record<string, unknown>;
   focusMode: string;
   failPath?: string;
   delayPath?: string;
@@ -37,6 +38,7 @@ export function createMockState(overrides: Partial<MockState> = {}): MockState {
     actorJournal: [],
     assets: [assetFixture()],
     capabilities: capabilitiesFixture(),
+    discoveryResult: discoveryResultFixture(),
     focusMode: "Audition Mode",
     ...overrides
   };
@@ -75,6 +77,7 @@ const exactRoutes = new Set([
   "GET /automation/source-research",
   "GET /automation/discovery/plugins",
   "GET /automation/discovery/providers",
+  "POST /automation/discovery/run",
   "GET /automation/submission-queue",
   "GET /agents/recommendations",
   "GET /agents/chief-of-staff/briefs",
@@ -140,11 +143,14 @@ export function assertHandledApiRequest(method: string, url: URL) {
   const methodPath = `${method} ${path}`;
   const queryIsExpected = methodPath === "GET /opportunities/material-matches"
     && url.search === "?include_hidden=false&min_score=15";
-  const hasUnexpectedQuery = url.search !== "" && !queryIsExpected;
+  const discoveryQueryIsExpected = methodPath === "POST /automation/discovery/run"
+    && url.search === "?mode=FilmTV&search_modes=Match+My+Profile&search_modes=Match+My+Archetypes";
+  const hasUnexpectedQuery = url.search !== "" && !queryIsExpected && !discoveryQueryIsExpected;
   const handled = !hasUnexpectedQuery && (
     exactRoutes.has(methodPath)
     || dynamicRoutes.some((pattern) => pattern.test(methodPath))
     || queryIsExpected
+    || discoveryQueryIsExpected
   );
   if (!handled) {
     throw new Error(`Unhandled mock API request: ${method} ${path}${url.search}`);
@@ -348,6 +354,7 @@ async function handle(request: Request, path: string, state: MockState): Promise
   if (path === "/automation/source-research" && method === "GET") return { body: [] };
   if (path === "/automation/discovery/plugins" && method === "GET") return { body: [] };
   if (path === "/automation/discovery/providers" && method === "GET") return { body: [] };
+  if (path === "/automation/discovery/run" && method === "POST") return { body: state.discoveryResult };
   if (path === "/automation/submission-queue" && method === "GET") return { body: [] };
   if (path === "/intelligence/readiness/opportunities" && method === "GET") return { body: [] };
   if (path === "/operations/availability" && method === "GET") return { body: [] };
@@ -380,4 +387,89 @@ const submissionFixture = (id: string, opportunity: Record<string, unknown>, pay
 const workflowTapeFixture = (opportunity: Record<string, unknown>, payload: Record<string, unknown>) => ({ id: `workflow-${Date.now()}`, opportunity_id: opportunity.id, submission_id: null, title: `${opportunity.role} Self-Tape`, project: opportunity.project, role: opportunity.role, tape_due_at: payload.tape_due_at, status: "Not Started", created_at: now, updated_at: now });
 const calendarFixture = (opportunity: Record<string, unknown>, payload: Record<string, unknown>) => ({ id: `calendar-${Date.now()}`, title: `${opportunity.role} Audition`, event_type: "Self-Tape Due", start_datetime: payload.tape_due_at, end_datetime: null, opportunity_id: opportunity.id, submission_id: null, is_virtual: true, created_at: now, updated_at: now });
 const capabilitiesFixture = () => ({ flags: { ai_configured: false, supervised_browser_available: false, persistent_file_storage_available: false, portfolio_demo: true }, states: { industry_trend_analysis: { state: "available" }, career_agent_recommendations: { state: "available" }, archetype_performance: { state: "available" } }, integrations: [], labels: {} });
+const discoveryResultFixture = () => ({
+  discovery_mode: "FilmTV",
+  search_modes: ["Match My Profile", "Match My Archetypes"],
+  opportunities_created: 2,
+  opportunities_hidden: 2,
+  opportunities_rejected: 1,
+  total_found: 4,
+  total_rejected: 1,
+  total_hidden: 2,
+  total_visible: 1,
+  total_travel_exceptions: 1,
+  limit_reached: false,
+  rejection_reasons_summary: { crew_or_staff_listing: 1 },
+  sources_run: 1,
+  coverage: {
+    approved_active_sources_checked: 0,
+    approved_active_source_names_checked: [],
+    eligible_sources_skipped: 0,
+    skipped_source_reasons: [],
+    approved_mode_sources_available: 0,
+    approved_mode_sources_label: "Film/TV sources",
+    suggested_sources_awaiting_approval: 1,
+    coverage_level: "Limited",
+    scope_note: "Configured mocked public search only."
+  },
+  public_web_search: {
+    configured: true,
+    run: true,
+    candidate_pages_found: 4,
+    candidates_rejected: 1,
+    eligible_breakdowns_added: 1,
+    sources_suggested_for_approval: 1
+  },
+  discovery_report: {
+    parallel_queries_run: 6,
+    candidate_pages_returned: 4,
+    candidate_pages_fetched: 4,
+    candidate_pages_parsed: 4,
+    accepted: 1,
+    reviewed: 2,
+    rejected: 1,
+    top_rejection_reasons: { crew_or_staff_listing: 1 },
+    average_parser_confidence: 79,
+    approved_source_hits: 0,
+    public_web_hits: 4,
+    candidates: [
+      {
+        page_title: "River City — Maya",
+        url: "https://casting.example.test/river-city",
+        decision: "Accepted",
+        outcome: "accept_visible",
+        reason_code: "direct_eligible_notice",
+        explanation: "Direct actionable acting notice passed current eligibility and trust checks.",
+        provider_evidence: {
+          provider: "Parallel",
+          canonical_url: "https://casting.example.test/river-city",
+          title: "River City — Maya",
+          snippet: "Fictional search-result context.",
+          published_date: "2026-08-01"
+        }
+      },
+      {
+        page_title: "Harbor City — Jordan",
+        decision: "Needs Review",
+        outcome: "review_hidden",
+        reason_code: "missing_deadline",
+        explanation: "No submission deadline was identified for the candidate."
+      },
+      {
+        page_title: "Lake City — Rina",
+        decision: "Needs Review",
+        outcome: "review_hidden",
+        reason_code: "travel_uncertain",
+        explanation: "In-person audition travel cannot be verified yet."
+      },
+      {
+        page_title: "Production Coordinator",
+        decision: "Rejected",
+        outcome: "reject_discarded",
+        reason_code: "crew_or_staff_listing",
+        explanation: "The candidate is not an actor-facing role notice."
+      }
+    ]
+  }
+});
 const dashboardWidgets = () => [{ id: "widget-1", widget_id: "quick_actions", display_name: "Quick Actions", enabled: true, sort_order: 0, size: "medium", created_at: now, updated_at: now }];

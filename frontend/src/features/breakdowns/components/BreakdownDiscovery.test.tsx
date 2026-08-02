@@ -123,11 +123,12 @@ describe("AutomationDashboard discovery state", () => {
   });
 
   it("loads and displays the Discovery Report returned by the feature hook", async () => {
+    const run = vi.fn(async () => discoveryResult);
     vi.mocked(useBreakdownDiscovery).mockReturnValue({
       discovering: false,
       error: null,
       clearError: vi.fn(),
-      run: vi.fn(async () => discoveryResult)
+      run
     });
     const { user } = renderDashboard();
 
@@ -136,6 +137,13 @@ describe("AutomationDashboard discovery state", () => {
 
     expect(screen.getByText("Parallel queries run")).toBeInTheDocument();
     expect(screen.getByText("87%")).toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith({
+      mode: "FilmTV",
+      searchModes: ["Match My Profile", "Match My Archetypes"],
+      specificArchetype: ""
+    });
+    expect(screen.getByText("No candidate pages were returned for this run.")).toBeInTheDocument();
   });
 
   it("shows bounded provider evidence with the canonical source link", async () => {
@@ -201,6 +209,13 @@ describe("AutomationDashboard discovery state", () => {
             outcome: "reject_discarded",
             reason_code: "crew_or_staff_listing",
             explanation: "The candidate is not an actor-facing role notice."
+          },
+          {
+            page_title: "Travel review",
+            decision: "Needs Review",
+            outcome: "review_hidden",
+            reason_code: "travel_uncertain",
+            explanation: "In-person audition travel cannot be verified yet."
           }
         ]
       }
@@ -216,10 +231,12 @@ describe("AutomationDashboard discovery state", () => {
     await user.click(screen.getByRole("button", { name: "Find Film/TV Breakdowns" }));
     await user.click(await screen.findByRole("button", { name: "View Discovery Report" }));
 
-    expect(screen.getByText("Needs Review")).toBeInTheDocument();
+    expect(screen.getAllByText("Needs Review")).toHaveLength(2);
     expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
     expect(screen.getByText(/below the 70% visible threshold/)).toBeInTheDocument();
     expect(screen.getByText(/not an actor-facing role notice/)).toBeInTheDocument();
+    expect(screen.getByText(/In-person audition travel cannot be verified yet/)).toBeInTheDocument();
+    expect(screen.getByText(/travel_uncertain/)).toBeInTheDocument();
   });
 
   it("renders provider text inertly and hides absent optional evidence labels", async () => {

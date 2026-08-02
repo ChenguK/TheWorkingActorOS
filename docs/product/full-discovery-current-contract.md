@@ -109,6 +109,10 @@ Successful no-result runs store the explicit version-1 container with an empty `
 
 ## Existing coverage incorporated
 
+Task 8 adds a zero-live-call vertical-slice contract through the real FastAPI discovery route with only Parallel and public-content retrieval mocked. Disposable PostgreSQL verification covers visible acceptance, hidden and travel review, crew and expired rejection, duplicate identity, first-canonical evidence ownership, an unapproved source suggestion, explicit empty success, provider failure, and fresh-session reload of ordered version-1 `DiscoveryRun` evidence. Frontend unit tests cover loading, success, empty, failure, decision labels, reachable travel review, optional and inert evidence, and one mutation with no historical-report query. The strict Playwright scenario asserts the exact discovery POST query, expected Breakdowns invalidation requests, no obsolete report GET, no evidence-triggered request, and no repeated mutation after navigation.
+
+All Task 8 fixtures use fictional local data, sentinel configuration, mocked provider results, and mocked public fetches. They require no `.env` credential and make no provider or public-network call; deployed Render and Netlify configuration remains unchanged. Real Parallel recall and result quality, real-world public-page fetch compatibility, and social-platform coverage constrained by public accessibility and platform rules remain unverified. No controlled live canary has been performed, and this contract does not claim that the system finds all auditions.
+
 - `backend/tests/test_public_web_search.py`: query shape, real documented response-object shape, URL dedupe, fetch/normalize behavior, empty/malformed responses, disabled configuration, current ambiguous/crew classification, and evidence reduction.
 - `backend/tests/test_public_web_routing_contract.py`: exact visible/hidden/travel/discarded/duplicate report counters and reasons, expired pre-persistence rejection, and absence of a medium-confidence review rule.
 - `backend/tests/test_discovery_modes.py`: mode, intent, visibility primitives, coverage honesty, and report aggregation.
