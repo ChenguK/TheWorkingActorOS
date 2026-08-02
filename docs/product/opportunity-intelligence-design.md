@@ -88,8 +88,9 @@ Hard outcomes are evaluated before point calculation and return score 0 with `Ig
 - existing visibility is `discarded`;
 - existing classification is rejected/non-acting;
 - `hidden_by_rule == "user_rejected"`;
-- existing trust result is explicitly blocked;
 - an existing hard role-type, demographic, availability, or audition-travel dealbreaker applies.
+
+Trust metadata alone is informational in the current domain and does not trigger a Phase 1 hard override. It may contribute to the later Confidence category, but only an existing eligibility, rejection, classification, or deadline decision can force the foundation score to zero.
 
 `is_duplicate` is not treated as evidence that the source is unsafe. It contributes `duplicate.existing = -25`; when the canonical opportunity is already retained, the duplicate's suggested action is `Ignore`. This preserves duplicate identity behavior without mutating it.
 

@@ -11,6 +11,11 @@ from app.services.breakdown_role_service import BreakdownRoleService
 from app.services.character_intelligence_engine import CharacterIntelligenceEngine
 from app.services.breakdown_deadline_service import BreakdownDeadlineService
 from app.services.demographic_match_service import DemographicMatchService
+from app.services.opportunity_score import (
+    OpportunityScore,
+    OpportunityScoringContext,
+    score_opportunity,
+)
 from app.services.travel_service import TravelEstimateResult, TravelService
 from app.services.watch_list_service import WatchListService
 
@@ -45,6 +50,16 @@ DEFAULT_EXCLUDED_ROLE_TYPES = [
 class OpportunityIntelligenceService:
     def __init__(self, db: Session) -> None:
         self.db = db
+
+    def score(
+        self,
+        opportunity: Opportunity,
+        actor: ActorProfile,
+        context: OpportunityScoringContext,
+        *,
+        as_of: datetime,
+    ) -> OpportunityScore:
+        return score_opportunity(opportunity, actor, context, as_of=as_of)
 
     def enrich(self, opportunity: Opportunity) -> Opportunity:
         user_rejection = self._user_rejection_snapshot(opportunity)
