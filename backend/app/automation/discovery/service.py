@@ -654,10 +654,18 @@ class DiscoveryAutomationService:
             return summary, None
 
         rejection_summary = dict(DEFAULT_REJECTION_SUMMARY)
+        pre_routed_reports = [
+            report
+            for report in summary["candidate_reports"]
+            if report.get("page_kind")
+            in {"multi_listing_index", "casting_resource", "irrelevant_page", "uncertain"}
+        ]
         created = 0
-        hidden = 0
+        hidden = sum(report.get("outcome") == "review_hidden" for report in pre_routed_reports)
         travel_exceptions = 0
-        discarded = 0
+        discarded = sum(
+            report.get("outcome") == "reject_discarded" for report in pre_routed_reports
+        )
         rejected = search_result.candidates_rejected
         visible = 0
         eligible_added = 0

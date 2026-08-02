@@ -24,7 +24,9 @@ from app.automation.discovery.public_web_search import (
     PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH,
     PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH,
     PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH,
+    PublicWebPageKind,
     PublicWebProviderEvidence,
+    classify_public_web_page,
     serialize_public_web_evidence,
 )
 
@@ -138,9 +140,24 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
         self.assertIn("New York, NY", joined)
         self.assertIn("working as local within 180 minutes", joined)
         self.assertIn("approved travel", joined)
-        self.assertIn("Warm Authority Detective roles", joined)
+        self.assertIn("Warm Authority Detective character roles", joined)
         self.assertIn("self tape remote audition", joined)
         self.assertNotIn("Crew", joined)
+        self.assertTrue(all("film television" in query for query in first))
+        self.assertTrue(
+            all(
+                any(
+                    intent in query
+                    for intent in (
+                        "casting notice",
+                        "audition notice",
+                        "seeking performer",
+                        "submission deadline",
+                    )
+                )
+                for query in first
+            )
+        )
 
     def test_incomplete_profile_omits_missing_dimensions_without_defaults(self):
         actor = self.actor(
@@ -363,13 +380,7 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
             with self.subTest(archetypes=archetypes):
                 assets = [SimpleNamespace(archetype_names=archetypes)] if archetypes else []
                 queries = self.configured_service(self.actor(assets=assets)).search_queries()
-                archetype_queries = [
-                    query
-                    for query in queries
-                    if query.endswith(" roles")
-                    and "language roles" not in query
-                    and "open casting" not in query
-                ]
+                archetype_queries = [query for query in queries if "character roles" in query]
                 self.assertEqual(bool(archetype_queries), bool(expected))
                 if archetype_queries:
                     for term in expected:
@@ -692,28 +703,118 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
         self.assertTrue(result.run)
         self.assertEqual(result.candidate_pages_found, 1)
         self.assertEqual(result.candidate_reports[0]["decision"], "Parsed")
+        self.assertEqual(
+            result.candidate_reports[0]["page_kind"], PublicWebPageKind.DIRECT_OPPORTUNITY
+        )
         self.assertIsNone(result.candidate_reports[0]["rejection_reason"])
         self.assertEqual(len(result.normalized), 1)
         self.assertEqual(result.normalized[0].breakdown_classification, "Acting Role")
         self.assertEqual(result.normalized[0].audition_type, "Self-Tape")
 
-    def test_current_ambiguous_casting_article_is_parsed_as_an_acting_role(self):
-        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+    def test_ambiguous_casting_article_is_classified_before_role_normalization(self):
         page_text = (
             "Industry article: Casting directors discuss how actors prepare for feature film auditions. "
             "The article mentions a lead role, supporting role, self tape, and SAG-AFTRA casting calls, "
             "but it provides no actionable role or submission deadline."
         )
 
-        item = service._normalize_candidate(
-            "https://news.example.com/features/casting-advice", page_text
+        result = classify_public_web_page(page_text)
+
+        self.assertEqual(result.kind, PublicWebPageKind.UNCERTAIN)
+        self.assertEqual(result.reason_code, "uncertain_page_kind")
+
+    def test_canary_derived_page_kinds_precede_role_level_evaluation(self):
+        fixtures = {
+            "backstage_directory": (
+                "Latest casting calls. Browse roles and filter by location from thousands of roles.",
+                PublicWebPageKind.MULTI_LISTING_INDEX,
+            ),
+            "casting_networks_landing": (
+                "Search results. Role card Alpha. Role card Beta. Browse casting calls today.",
+                PublicWebPageKind.MULTI_LISTING_INDEX,
+            ),
+            "union_resource": (
+                "Union guidance and casting resources for performers. Learn how casting works.",
+                PublicWebPageKind.CASTING_RESOURCE,
+            ),
+            "all_casting_directory": (
+                "Thousands of casting calls and thousands of roles in our talent database.",
+                PublicWebPageKind.MULTI_LISTING_INDEX,
+            ),
+            "film_commission_resource": (
+                "Film commission directory and resource guide for regional productions.",
+                PublicWebPageKind.CASTING_RESOURCE,
+            ),
+            "direct_notice": (
+                "Project: Harbor Light. Role: Maya. Seeking actors. Submit by December 1, 2035. "
+                "Self-tape instructions and compensation are provided.",
+                PublicWebPageKind.DIRECT_OPPORTUNITY,
+            ),
+            "one_production_multiple_roles": (
+                "Project: North Star. Role: Devon; Role: Riley. Seeking performers. "
+                "Submission deadline December 1, 2035. Shoot date January 12, 2036.",
+                PublicWebPageKind.DIRECT_OPPORTUNITY,
+            ),
+            "ambiguous_article": (
+                "Industry article with advice about auditions, casting calls, and preparing a self tape.",
+                PublicWebPageKind.UNCERTAIN,
+            ),
+            "irrelevant_employment": (
+                "Employment opportunity: join our staff as a casting director position.",
+                PublicWebPageKind.IRRELEVANT_PAGE,
+            ),
+        }
+
+        for name, (text, expected) in fixtures.items():
+            with self.subTest(name=name):
+                self.assertEqual(classify_public_web_page(text).kind, expected)
+
+    def test_directory_resource_and_uncertain_pages_do_not_normalize_as_one_role(self):
+        pages = [
+            "Browse roles from thousands of casting calls. Filter by location and category.",
+            "Casting resources and union guidance explaining how casting works for performers.",
+            "Industry article discussing actors, auditions, roles, and self tapes.",
+        ]
+        service = self.configured_service()
+        service._parallel_client = SimpleNamespace(
+            search=lambda **_kwargs: {
+                "results": [
+                    {"url": f"https://public.example.test/page-{index}"}
+                    for index in range(len(pages))
+                ]
+            }
+        )
+        page_by_url = {
+            f"https://public.example.test/page-{index}": page for index, page in enumerate(pages)
+        }
+        service._fetch_visible_text = lambda url: PublicContentFetchResult(
+            PublicContentFetchOutcome.SUCCESS, text=page_by_url[url]
         )
 
-        self.assertIsNotNone(item)
-        self.assertEqual(item.breakdown_classification, "Theater Role")
-        self.assertEqual(item.original_post_url, "https://news.example.com/features/casting-advice")
-        self.assertEqual(item.source_metadata["source_url"], item.original_post_url)
-        self.assertNotIn("provider_excerpt", item.source_metadata)
+        result = service.search("FilmTV")
+
+        self.assertEqual(result.normalized, [])
+        self.assertEqual(
+            [report["outcome"] for report in result.candidate_reports],
+            ["review_hidden", "reject_discarded", "review_hidden"],
+        )
+        self.assertEqual(
+            [report["reason_code"] for report in result.candidate_reports],
+            ["multi_listing_index", "casting_resource_page", "uncertain_page_kind"],
+        )
+
+    def test_protected_page_keeps_fetch_rejection_and_reports_page_kind(self):
+        service = self.configured_service()
+        service._fetch_visible_text = lambda _url: PublicContentFetchResult(
+            PublicContentFetchOutcome.CAPTCHA_ACCESS_DENIED,
+            message="Candidate is blocked by access controls or a bot challenge.",
+        )
+
+        result = service.search("FilmTV")
+
+        report = result.candidate_reports[0]
+        self.assertEqual(report["page_kind"], PublicWebPageKind.PROTECTED_PAGE)
+        self.assertEqual(report["reason_code"], "fetch_captcha_access_denied")
 
     def test_current_staff_or_crew_page_is_rejected_before_normalization(self):
         service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())

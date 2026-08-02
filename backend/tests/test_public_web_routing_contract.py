@@ -238,3 +238,49 @@ def test_ambiguous_medium_confidence_result_routes_to_hidden_review():
     assert candidate["reason_code"] == "medium_parse_confidence"
     assert candidate["parser_confidence"] == 55
     assert candidate["rejection_reason"] is None
+
+
+def test_pre_routed_page_kinds_are_counted_without_creating_opportunities():
+    search_result = PublicWebSearchResult(
+        configured=True,
+        run=True,
+        candidate_pages_found=3,
+        candidates_rejected=1,
+        candidate_reports=[
+            {
+                "url": "https://public.example.test/directory",
+                "page_kind": "multi_listing_index",
+                "decision": "Needs Review",
+                "outcome": "review_hidden",
+                "reason_code": "multi_listing_index",
+            },
+            {
+                "url": "https://public.example.test/resource",
+                "page_kind": "casting_resource",
+                "decision": "Rejected",
+                "outcome": "reject_discarded",
+                "reason_code": "casting_resource_page",
+            },
+            {
+                "url": "https://public.example.test/uncertain",
+                "page_kind": "uncertain",
+                "decision": "Needs Review",
+                "outcome": "review_hidden",
+                "reason_code": "uncertain_page_kind",
+            },
+        ],
+    )
+    service = DiscoveryAutomationService(db=None)
+    service._create_opportunity = lambda _candidate: pytest.fail(
+        "pre-routed pages must not reach Opportunity creation"
+    )
+
+    summary, routing = service._process_public_web_search_result(
+        search_result, "FilmTV", None, ["Match My Profile"], None
+    )
+
+    assert routing["created"] == 0
+    assert routing["hidden"] == 2
+    assert routing["discarded"] == 1
+    assert routing["rejected"] == 1
+    assert summary["candidate_pages_parsed"] == 0

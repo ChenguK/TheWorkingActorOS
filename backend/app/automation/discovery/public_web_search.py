@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
@@ -65,6 +66,122 @@ PUBLIC_WEB_OPEN_GENDER_TERMS = {
     "gender open",
     "open gender",
 }
+
+
+class PublicWebPageKind(StrEnum):
+    DIRECT_OPPORTUNITY = "direct_opportunity"
+    MULTI_LISTING_INDEX = "multi_listing_index"
+    CASTING_RESOURCE = "casting_resource"
+    PROTECTED_PAGE = "protected_page"
+    IRRELEVANT_PAGE = "irrelevant_page"
+    UNCERTAIN = "uncertain"
+
+
+@dataclass(frozen=True)
+class PublicWebPageKindResult:
+    kind: PublicWebPageKind
+    reason_code: str
+    explanation: str
+
+
+def classify_public_web_page(text: str) -> PublicWebPageKindResult:
+    """Classify page purpose before any page-wide role eligibility inference."""
+    normalized = re.sub(r"\s+", " ", text).strip().casefold()
+
+    irrelevant_terms = (
+        "production assistant job",
+        "casting coordinator job",
+        "casting director position",
+        "join our staff",
+        "employment opportunity",
+        "crew positions",
+    )
+    employment_context = bool(
+        re.search(r"\b(?:hiring|employment|job|position)\b", normalized)
+        and re.search(
+            r"\b(?:casting coordinator|production assistant|casting director|staff|crew)\b",
+            normalized,
+        )
+    )
+    if any(term in normalized for term in irrelevant_terms) or employment_context:
+        return PublicWebPageKindResult(
+            PublicWebPageKind.IRRELEVANT_PAGE,
+            "irrelevant_page",
+            "The page is employment or other content unrelated to an actor-facing opportunity.",
+        )
+
+    resource_terms = (
+        "resource guide",
+        "casting resources",
+        "union guidance",
+        "how to find casting",
+        "how casting works",
+        "casting professionals directory",
+        "film commission directory",
+        "industry advice",
+    )
+    if any(term in normalized for term in resource_terms):
+        return PublicWebPageKindResult(
+            PublicWebPageKind.CASTING_RESOURCE,
+            "casting_resource_page",
+            "The page is a casting resource, guide, or professional directory rather than a role notice.",
+        )
+
+    directory_terms = (
+        "browse roles",
+        "browse casting calls",
+        "latest casting calls",
+        "thousands of roles",
+        "thousands of casting",
+        "jobs near me",
+        "talent database",
+        "search results",
+        "filter by location",
+        "filter roles",
+        "acting jobs directory",
+    )
+    repeated_cards = len(re.findall(r"\b(?:role|project|casting call)\s+card\b", normalized)) >= 2
+    if any(term in normalized for term in directory_terms) or repeated_cards:
+        return PublicWebPageKindResult(
+            PublicWebPageKind.MULTI_LISTING_INDEX,
+            "multi_listing_index",
+            "The page contains a collection of listings that cannot be evaluated as one role.",
+        )
+
+    project_signal = bool(
+        re.search(r"\b(?:project|production|series|film)\s*[:\-]\s*[^.;]{2,80}", normalized)
+    )
+    role_signal = bool(
+        re.search(r"\b(?:role|character)\s*[:\-]\s*[^.;]{2,80}", normalized)
+        or re.search(r"\bseeking\s+(?:actors?|performers?|talent)\b", normalized)
+    )
+    action_signals = sum(
+        term in normalized
+        for term in (
+            "submit by",
+            "submission deadline",
+            "submission instructions",
+            "how to submit",
+            "self tape",
+            "self-tape",
+            "audition date",
+            "shoot date",
+            "production date",
+            "compensation",
+        )
+    )
+    if project_signal and role_signal and action_signals:
+        return PublicWebPageKindResult(
+            PublicWebPageKind.DIRECT_OPPORTUNITY,
+            "direct_opportunity_page",
+            "The page describes one production with actionable acting-role details.",
+        )
+
+    return PublicWebPageKindResult(
+        PublicWebPageKind.UNCERTAIN,
+        "uncertain_page_kind",
+        "The page does not establish whether it is one actionable acting opportunity.",
+    )
 
 
 @dataclass
@@ -278,6 +395,11 @@ class PublicWebBreakdownSearch:
                 rejected += 1
                 rejection_reasons["fetch_failed"] += 1
                 report["fetch_outcome"] = fetch_result.outcome.value
+                if fetch_result.outcome in {
+                    PublicContentFetchOutcome.PROTECTED_LOGIN_REQUIRED,
+                    PublicContentFetchOutcome.CAPTCHA_ACCESS_DENIED,
+                }:
+                    report["page_kind"] = PublicWebPageKind.PROTECTED_PAGE.value
                 report.update(
                     self._decision_policy.reject(
                         f"fetch_{fetch_result.outcome.value}", fetch_result.message
@@ -286,6 +408,42 @@ class PublicWebBreakdownSearch:
                 candidate_reports.append(report)
                 continue
             page_text = fetch_result.text or ""
+            page_kind = classify_public_web_page(page_text)
+            report["page_kind"] = page_kind.kind.value
+            if page_kind.kind is PublicWebPageKind.MULTI_LISTING_INDEX:
+                report.update(
+                    self._decision_policy.review(
+                        page_kind.reason_code, page_kind.explanation
+                    ).as_report_fields()
+                )
+                candidate_reports.append(report)
+                continue
+            if page_kind.kind is PublicWebPageKind.CASTING_RESOURCE:
+                rejected += 1
+                report.update(
+                    self._decision_policy.reject(
+                        page_kind.reason_code, page_kind.explanation
+                    ).as_report_fields()
+                )
+                candidate_reports.append(report)
+                continue
+            if page_kind.kind is PublicWebPageKind.IRRELEVANT_PAGE:
+                rejected += 1
+                report.update(
+                    self._decision_policy.reject(
+                        page_kind.reason_code, page_kind.explanation
+                    ).as_report_fields()
+                )
+                candidate_reports.append(report)
+                continue
+            if page_kind.kind is PublicWebPageKind.UNCERTAIN:
+                report.update(
+                    self._decision_policy.review(
+                        page_kind.reason_code, page_kind.explanation
+                    ).as_report_fields()
+                )
+                candidate_reports.append(report)
+                continue
             item = self._normalize_candidate(url, page_text)
             if item:
                 normalized.append(item)
@@ -334,7 +492,7 @@ class PublicWebBreakdownSearch:
             return []
 
         actor = self.actor
-        base = ["current", "public", "film", "television", "acting", "casting"]
+        base = ["current", "public", "film", "television"]
         role_terms = self._role_terms(actor)
         age_term = self._playable_age_term(actor)
         gender_terms = self._gender_terms(actor)
@@ -348,12 +506,29 @@ class PublicWebBreakdownSearch:
         remote_terms = self._remote_terms(actor)
 
         plans = [
-            [*base, *role_terms, age_term, *gender_terms, *identity_terms],
-            [*base, union_term, *role_terms] if union_term else [],
-            [*base, *language_terms, "language roles"] if language_terms else [],
-            [*base, *location_terms] if location_terms else [],
-            [*base, *archetype_terms, "roles"] if archetype_terms else [],
-            [*base, "open casting", *remote_terms, "roles"],
+            [
+                *base,
+                "casting notice",
+                "seeking actor",
+                *role_terms,
+                age_term,
+                *gender_terms,
+                *identity_terms,
+                "submit",
+            ],
+            [*base, union_term, *role_terms, "audition notice", "submission deadline"]
+            if union_term
+            else [],
+            [*base, *language_terms, "language roles", "seeking performer", "submit"]
+            if language_terms
+            else [],
+            [*base, *location_terms, "casting notice", "role", "shoot date"]
+            if location_terms
+            else [],
+            [*base, *archetype_terms, "character roles", "casting notice", "submit"]
+            if archetype_terms
+            else [],
+            [*base, "open casting", *remote_terms, "role", "submission deadline"],
         ]
         return self._bounded_queries(plans)
 
