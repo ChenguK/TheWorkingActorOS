@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,9 @@ from app.automation.discovery.public_content_fetch import (
 )
 from app.automation.discovery.public_web_search import (
     PARALLEL_ADVANCED_SETTINGS,
+    PUBLIC_WEB_DURABLE_EVIDENCE_VERSION,
+    PUBLIC_WEB_MAX_DURABLE_EVIDENCE_ITEMS,
+    PUBLIC_WEB_MAX_DURABLE_EVIDENCE_JSON_LENGTH,
     PUBLIC_WEB_MAX_ARCHETYPE_TERMS,
     PUBLIC_WEB_MAX_LANGUAGE_TERMS,
     PUBLIC_WEB_MAX_LOCATION_TERMS,
@@ -20,6 +24,8 @@ from app.automation.discovery.public_web_search import (
     PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH,
     PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH,
     PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH,
+    PublicWebProviderEvidence,
+    serialize_public_web_evidence,
 )
 
 
@@ -815,6 +821,115 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
         self.assertIn(
             "Public web search is not configured. Only approved sources were searched.", source
         )
+
+    def test_durable_provider_evidence_is_versioned_bounded_and_first_url_wins(self):
+        prefix = "https://casting.example.test/"
+        first_url = prefix + ("a" * (PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH - len(prefix) - 7))
+        evidence = [
+            PublicWebProviderEvidence(
+                provider="p" * (PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH + 20),
+                canonical_url=first_url + "#first",
+                title="t" * (PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH + 20),
+                snippet="s" * (PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH + 20),
+                published_date="2026-08-02",
+            ),
+            PublicWebProviderEvidence(
+                provider="Changed",
+                canonical_url=first_url + "#second",
+                title="Later duplicate",
+            ),
+            *[
+                PublicWebProviderEvidence(
+                    provider="Parallel",
+                    canonical_url=f"https://casting.example.test/{index}",
+                    title=f"Result {index}",
+                )
+                for index in range(20)
+            ],
+        ]
+
+        payload = serialize_public_web_evidence(evidence)
+
+        self.assertEqual(payload["version"], PUBLIC_WEB_DURABLE_EVIDENCE_VERSION)
+        self.assertEqual(len(payload["items"]), PUBLIC_WEB_MAX_DURABLE_EVIDENCE_ITEMS)
+        self.assertEqual(payload["items"][0]["canonical_url"], first_url)
+        self.assertEqual(len(payload["items"][0]["provider"]), PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH)
+        self.assertEqual(len(payload["items"][0]["title"]), PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH)
+        self.assertEqual(
+            len(payload["items"][0]["snippet"]), PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH
+        )
+        self.assertNotIn("Later duplicate", str(payload))
+
+    def test_durable_provider_evidence_rechecks_sanitization_and_privacy(self):
+        payload = serialize_public_web_evidence(
+            [
+                PublicWebProviderEvidence(
+                    provider="Parallel",
+                    canonical_url="https://casting.example.test/safe#fragment",
+                    title="<script>private-script</script> Safe title\x00",
+                    snippet="[context](https://secret.example.test)   with   spacing",
+                    published_date="not-a-date",
+                ),
+                PublicWebProviderEvidence(
+                    provider="Parallel",
+                    canonical_url="https://casting.example.test/private",
+                    title="Fixture Actor private name",
+                    snippet='{"raw": {"nested": true}}',
+                ),
+                PublicWebProviderEvidence(
+                    provider="Parallel",
+                    canonical_url="https://casting.example.test/credential",
+                    snippet="api_key=DO_NOT_PERSIST",
+                ),
+                PublicWebProviderEvidence(
+                    provider="Parallel",
+                    canonical_url="https://user:password@casting.example.test/private",
+                ),
+            ],
+            private_values=("Fixture Actor",),
+        )
+
+        serialized = json.dumps(payload)
+        self.assertEqual(
+            payload["items"][0],
+            {
+                "provider": "Parallel",
+                "canonical_url": "https://casting.example.test/safe",
+                "title": "Safe title",
+                "snippet": "context with spacing",
+            },
+        )
+        for prohibited in (
+            "private-script",
+            "secret.example.test",
+            "Fixture Actor",
+            '"nested"',
+            "DO_NOT_PERSIST",
+            "password@",
+        ):
+            self.assertNotIn(prohibited, serialized)
+        self.assertEqual(set(payload["items"][1]), {"provider", "canonical_url"})
+        self.assertEqual(set(payload["items"][2]), {"provider", "canonical_url"})
+
+    def test_maximum_durable_provider_evidence_has_fixed_serialized_ceiling(self):
+        prefix = "https://casting.example.test/"
+        items = [
+            PublicWebProviderEvidence(
+                provider="p" * PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH,
+                canonical_url=prefix
+                + str(index)
+                + ("u" * (PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH - len(prefix) - len(str(index)))),
+                title="t" * PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH,
+                snippet="s" * PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH,
+                published_date="2026-08-02",
+            )
+            for index in range(PUBLIC_WEB_MAX_DURABLE_EVIDENCE_ITEMS)
+        ]
+
+        payload = {"public_web_evidence": serialize_public_web_evidence(items)}
+        serialized = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+        self.assertEqual(len(serialized), PUBLIC_WEB_MAX_DURABLE_EVIDENCE_JSON_LENGTH)
 
 
 if __name__ == "__main__":

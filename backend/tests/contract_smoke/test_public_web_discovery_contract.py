@@ -47,7 +47,7 @@ def _direct_notice():
     )
 
 
-def _search_result(*items):
+def _search_result(*items, provider_evidence=None):
     from app.automation.discovery.public_web_search import PublicWebSearchResult
 
     return PublicWebSearchResult(
@@ -66,8 +66,15 @@ def _search_result(*items):
             }
             for candidate in items
         ],
+        provider_evidence=list(provider_evidence or []),
         normalized=list(items),
     )
+
+
+def _evidence(url, **values):
+    from app.automation.discovery.public_web_search import PublicWebProviderEvidence
+
+    return PublicWebProviderEvidence(provider="Parallel", canonical_url=url, **values)
 
 
 def _configured_actor(db):
@@ -215,8 +222,67 @@ def test_public_web_no_result_persists_one_successful_run(db):
     assert run.total_found == 0
     assert run.total_saved == 0
     assert run.total_rejected == 0
+    assert run.run_payload["public_web_evidence"] == {"version": 1, "items": []}
     assert db.scalar(select(func.count()).select_from(Opportunity)) == 0
     assert db.scalar(select(func.count()).select_from(SourceResearchItem)) == 0
+
+
+def test_public_web_evidence_is_durable_exact_and_run_scoped_across_sessions(db):
+    from app.core.database import SessionLocal
+    from app.db.models import DiscoveryRun, Opportunity, SourceResearchItem
+
+    actor = _configured_actor(db)
+    actor.notes = "PRIVATE_ACTOR_NOTE_SENTINEL"
+    evidence = [
+        _evidence(
+            "https://evidence.example.test/first#fragment",
+            title="First Role",
+            snippet="First provider context.",
+            published_date="2026-08-01",
+        ),
+        _evidence(
+            "https://evidence.example.test/rejected",
+            title="Rejected Candidate",
+            snippet="Still valid run-scoped provider evidence.",
+        ),
+        _evidence(
+            "https://evidence.example.test/private-sentinel",
+            title="PRIVATE_ACTOR_NOTE_SENTINEL",
+        ),
+    ]
+    result = _search_result(provider_evidence=evidence)
+    result.candidate_pages_found = 3
+
+    _run(_public_web_service(db, result))
+    db.close()
+
+    with SessionLocal() as fresh:
+        run = fresh.scalar(select(DiscoveryRun))
+        assert run.run_payload["public_web_evidence"] == {
+            "version": 1,
+            "items": [
+                {
+                    "provider": "Parallel",
+                    "canonical_url": "https://evidence.example.test/first",
+                    "title": "First Role",
+                    "snippet": "First provider context.",
+                    "published_date": "2026-08-01",
+                },
+                {
+                    "provider": "Parallel",
+                    "canonical_url": "https://evidence.example.test/rejected",
+                    "title": "Rejected Candidate",
+                    "snippet": "Still valid run-scoped provider evidence.",
+                },
+                {
+                    "provider": "Parallel",
+                    "canonical_url": "https://evidence.example.test/private-sentinel",
+                },
+            ],
+        }
+        assert "PRIVATE_ACTOR_NOTE_SENTINEL" not in str(run.run_payload)
+        assert fresh.scalar(select(func.count()).select_from(Opportunity)) == 0
+        assert fresh.scalar(select(func.count()).select_from(SourceResearchItem)) == 0
 
 
 def test_public_web_mixed_run_persists_only_accepted_and_reviewable_candidates(db):
@@ -303,6 +369,7 @@ def test_public_web_provider_failure_persists_failed_run_and_recovers_session(db
     assert run is not None
     assert run.status == "failed"
     assert run.error_message == "public provider exploded"
+    assert "public_web_evidence" not in run.run_payload
     assert (
         db.scalar(
             select(func.count())
@@ -379,6 +446,7 @@ def test_public_web_database_failure_rolls_back_domain_writes_and_persists_faile
     run = db.scalar(select(DiscoveryRun))
     assert run is not None
     assert run.status == "failed"
+    assert "public_web_evidence" not in run.run_payload
     assert db.execute(select(1)).scalar_one() == 1
 
 
@@ -389,7 +457,14 @@ def test_public_web_commit_failure_keeps_original_error_and_persists_failed_run(
         pass
 
     _configured_actor(db)
-    service = _public_web_service(db, _search_result())
+    service = _public_web_service(
+        db,
+        _search_result(
+            provider_evidence=[
+                _evidence("https://evidence.example.test/must-roll-back", title="Partial")
+            ]
+        ),
+    )
     real_commit = db.commit
     commit_calls = 0
 
@@ -409,6 +484,7 @@ def test_public_web_commit_failure_keeps_original_error_and_persists_failed_run(
     assert run is not None
     assert run.status == "failed"
     assert run.error_message == "public-web commit failed"
+    assert "public_web_evidence" not in run.run_payload
     assert commit_calls == 2
     assert db.execute(select(1)).scalar_one() == 1
 
@@ -426,6 +502,59 @@ def test_public_web_failed_run_persistence_does_not_mask_provider_error(db, monk
         _run(service)
 
     assert db.execute(select(1)).scalar_one() == 1
+
+
+def test_public_web_evidence_serialization_failure_rolls_back_success_and_evidence(db, monkeypatch):
+    from app.automation.discovery import service as service_module
+    from app.db.models import DiscoveryRun, Opportunity, SourceResearchItem
+
+    _configured_actor(db)
+    result = _search_result(
+        _direct_notice(),
+        provider_evidence=[
+            _evidence("https://evidence.example.test/serialization", title="Partial")
+        ],
+    )
+    service = _public_web_service(db, result)
+
+    def fail_serialization(*_args, **_kwargs):
+        raise ValueError("evidence serialization failed")
+
+    monkeypatch.setattr(service_module, "serialize_public_web_evidence", fail_serialization)
+
+    with pytest.raises(ValueError, match="evidence serialization failed"):
+        _run(service)
+
+    run = db.scalar(select(DiscoveryRun))
+    assert run is not None
+    assert run.status == "failed"
+    assert "public_web_evidence" not in run.run_payload
+    assert db.scalar(select(func.count()).select_from(Opportunity)) == 0
+    assert db.scalar(select(func.count()).select_from(SourceResearchItem)) == 0
+
+
+def test_historical_discovery_run_payload_without_evidence_remains_readable(db):
+    from app.db.models import DiscoveryRun
+
+    historical = DiscoveryRun(
+        discovery_mode="FilmTV",
+        status="succeeded",
+        run_payload={"source": "Historical Source", "provider_key": "historical"},
+    )
+    db.add(historical)
+    db.commit()
+    db.expire_all()
+
+    reloaded = db.get(DiscoveryRun, historical.id)
+
+    assert reloaded.run_payload == {
+        "source": "Historical Source",
+        "provider_key": "historical",
+    }
+    assert reloaded.run_payload.get("public_web_evidence", {"version": 1, "items": []}) == {
+        "version": 1,
+        "items": [],
+    }
 
 
 def test_public_web_success_commits_exactly_once(db, monkeypatch):

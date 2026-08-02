@@ -37,7 +37,11 @@ from app.services.breakdown_details_service import BreakdownDetailsService
 from app.services.breakdown_intelligence_engine import BreakdownIntelligenceEngine
 from app.services.breakdown_role_service import BreakdownRoleService
 from app.services.breakdown_deadline_service import BreakdownDeadlineService
-from app.automation.discovery.public_web_search import PublicWebBreakdownSearch, PublicWebSearchResult
+from app.automation.discovery.public_web_search import (
+    PublicWebBreakdownSearch,
+    PublicWebSearchResult,
+    serialize_public_web_evidence,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -568,6 +572,22 @@ class DiscoveryAutomationService:
                 specific_archetype,
             )
             routing = result or self._empty_result("Parallel Public Web Search")
+            run.run_payload = {
+                **run_payload,
+                "public_web_evidence": serialize_public_web_evidence(
+                    search_result.provider_evidence,
+                    private_values=tuple(
+                        value
+                        for value in (
+                            getattr(actor, "name", None),
+                            getattr(actor, "accessibility_notes", None),
+                            getattr(actor, "demographic_notes", None),
+                            getattr(actor, "notes", None),
+                        )
+                        if isinstance(value, str) and value
+                    ),
+                ),
+            }
             run.status = "succeeded"
             run.opportunities_found = search_result.candidate_pages_found
             run.opportunities_created = routing["created"]

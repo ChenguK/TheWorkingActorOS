@@ -37,6 +37,9 @@ PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH = 240
 PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH = 600
 PUBLIC_WEB_PROVIDER_RESULT_ID_MAX_LENGTH = 200
 PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH = 10
+PUBLIC_WEB_DURABLE_EVIDENCE_VERSION = 1
+PUBLIC_WEB_MAX_DURABLE_EVIDENCE_ITEMS = PARALLEL_ADVANCED_SETTINGS["max_results"]
+PUBLIC_WEB_MAX_DURABLE_EVIDENCE_JSON_LENGTH = 20_137
 PUBLIC_WEB_MAX_QUERY_COUNT = 6
 PUBLIC_WEB_MAX_QUERY_LENGTH = 220
 PUBLIC_WEB_MAX_ARCHETYPE_TERMS = 3
@@ -81,6 +84,108 @@ class PublicWebProviderEvidence:
             "published_date": self.published_date,
         }
         return {key: value for key, value in values.items() if value is not None}
+
+
+def serialize_public_web_evidence(
+    evidence_items: list[PublicWebProviderEvidence],
+    private_values: tuple[str, ...] = (),
+) -> dict:
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for evidence in evidence_items:
+        if len(items) == PUBLIC_WEB_MAX_DURABLE_EVIDENCE_ITEMS:
+            break
+        provider = _durable_evidence_text(
+            evidence.provider, PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH, private_values
+        )
+        canonical_url = _canonical_provider_url(evidence.canonical_url)
+        if (
+            not provider
+            or not canonical_url
+            or _contains_private_value(canonical_url, private_values)
+            or _contains_credential(canonical_url)
+            or canonical_url in seen
+        ):
+            continue
+        seen.add(canonical_url)
+        item = {"provider": provider, "canonical_url": canonical_url}
+        optional_values = {
+            "title": _durable_evidence_text(
+                evidence.title, PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH, private_values
+            ),
+            "snippet": _durable_evidence_text(
+                evidence.snippet, PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH, private_values
+            ),
+            "published_date": _provider_date(evidence.published_date),
+        }
+        item.update({key: value for key, value in optional_values.items() if value is not None})
+        items.append(item)
+    return {"version": PUBLIC_WEB_DURABLE_EVIDENCE_VERSION, "items": items}
+
+
+def _durable_evidence_text(value: Any, maximum: int, private_values: tuple[str, ...]) -> str | None:
+    text = _provider_plain_text(value, maximum)
+    if (
+        not text
+        or _contains_private_value(text, private_values)
+        or _contains_credential(text)
+        or ("{" in text and "}" in text)
+    ):
+        return None
+    return text
+
+
+def _contains_private_value(value: str, private_values: tuple[str, ...]) -> bool:
+    lowered = value.casefold()
+    return any(
+        candidate.casefold() in lowered for candidate in private_values if len(candidate) >= 3
+    )
+
+
+def _contains_credential(value: str) -> bool:
+    return bool(
+        re.search(
+            r"(?i)(?:(?:api[_-]?key|access[_-]?token|token|password|authorization)\s*[:=]|bearer\s+\S+)",
+            value,
+        )
+    )
+
+
+def _provider_plain_text(value: Any, maximum: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?(?:</\1\s*>|$)", " ", value)
+    text = re.sub(r"(?s)<[^>]*>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = text.replace("`", "")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:maximum].rstrip() or None
+
+
+def _provider_date(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) > PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+def _canonical_provider_url(url: Any) -> str | None:
+    if not isinstance(url, str) or len(url) > PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH:
+        return None
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+    return parsed._replace(fragment="").geturl()
 
 
 @dataclass
@@ -568,25 +673,10 @@ class PublicWebBreakdownSearch:
         )
 
     def _provider_plain_text(self, value: Any, maximum: int) -> str | None:
-        if not isinstance(value, str):
-            return None
-        text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?(?:</\1\s*>|$)", " ", value)
-        text = re.sub(r"(?s)<[^>]*>", " ", text)
-        text = html.unescape(text)
-        text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
-        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-        text = text.replace("`", "")
-        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:maximum].rstrip() or None
+        return _provider_plain_text(value, maximum)
 
     def _provider_date(self, value: Any) -> str | None:
-        if not isinstance(value, str) or len(value) > PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH:
-            return None
-        try:
-            return date.fromisoformat(value).isoformat()
-        except ValueError:
-            return None
+        return _provider_date(value)
 
     def _title_from_url(self, url: str) -> str:
         parsed = urlparse(url)
