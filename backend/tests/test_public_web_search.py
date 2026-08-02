@@ -10,6 +10,12 @@ from app.automation.discovery.public_web_search import (
     PUBLIC_WEB_MAX_LOCATION_TERMS,
     PUBLIC_WEB_MAX_QUERY_COUNT,
     PUBLIC_WEB_MAX_QUERY_LENGTH,
+    PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH,
+    PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH,
+    PUBLIC_WEB_PROVIDER_RESULT_ID_MAX_LENGTH,
+    PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH,
+    PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH,
+    PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH,
 )
 
 
@@ -449,19 +455,75 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
 
         self.assertEqual(urls, ["https://casting.example.com/roles/feature-supporting"])
 
-    def test_current_duplicate_result_contract_keeps_only_url_and_title(self):
+    def test_dictionary_result_preserves_documented_bounded_evidence(self):
         service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
         response = {
             "results": [
                 {
                     "url": "https://casting.example.com/roles/feature-supporting#details",
                     "title": "Feature Supporting Role",
-                    "excerpt": "Provider evidence that is not retained.",
-                    "id": "provider-result-1",
+                    "excerpts": ["A current supporting-role notice."],
+                    "publish_date": "2026-07-30",
+                    "id": "undocumented-result-id",
+                    "nested": {"private_payload": "must not survive"},
                 },
+            ]
+        }
+
+        records = service._extract_candidate_records(response)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(
+            records[0].as_report_dict(),
+            {
+                "provider": "Parallel",
+                "canonical_url": "https://casting.example.com/roles/feature-supporting",
+                "title": "Feature Supporting Role",
+                "snippet": "A current supporting-role notice.",
+                "published_date": "2026-07-30",
+            },
+        )
+        serialized = records[0].as_report_dict()
+        self.assertNotIn("id", serialized)
+        self.assertNotIn("nested", serialized)
+        self.assertNotIn("private_payload", str(serialized))
+
+    def test_typed_parallel_result_preserves_documented_fields(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        response = SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    url="https://casting.example.com/roles/current-feature#apply",
+                    title="Current Feature Role",
+                    excerpts=["Lead role with self-tape instructions."],
+                    publish_date="2026-08-01",
+                )
+            ]
+        )
+
+        records = service._extract_candidate_records(response)
+
+        self.assertEqual(
+            records[0].as_report_dict(),
+            {
+                "provider": "Parallel",
+                "canonical_url": "https://casting.example.com/roles/current-feature",
+                "title": "Current Feature Role",
+                "snippet": "Lead role with self-tape instructions.",
+                "published_date": "2026-08-01",
+            },
+        )
+
+    def test_absent_and_malformed_optional_evidence_fields_are_omitted(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        response = {
+            "results": [
+                {"url": "https://casting.example.com/a"},
                 {
-                    "link": "https://casting.example.com/roles/feature-supporting",
-                    "title": "Duplicate title is discarded with the duplicate URL.",
+                    "url": "https://casting.example.com/b",
+                    "title": 42,
+                    "excerpts": "not-a-list",
+                    "publish_date": "yesterday",
                 },
             ]
         }
@@ -469,16 +531,118 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
         records = service._extract_candidate_records(response)
 
         self.assertEqual(
-            records,
+            [record.as_report_dict() for record in records],
             [
-                {
-                    "url": "https://casting.example.com/roles/feature-supporting",
-                    "page_title": "Feature Supporting Role",
-                }
+                {"provider": "Parallel", "canonical_url": "https://casting.example.com/a"},
+                {"provider": "Parallel", "canonical_url": "https://casting.example.com/b"},
             ],
         )
-        self.assertNotIn("excerpt", records[0])
-        self.assertNotIn("id", records[0])
+
+    def test_unsupported_or_malformed_results_are_skipped_without_recursive_payload_search(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        responses = [
+            {"data": [{"url": "https://casting.example.com/hidden"}]},
+            {"results": [{"url": "javascript:alert(1)"}, {"url": 42}, object()]},
+            [SimpleNamespace(url="https://casting.example.com/unwrapped")],
+            object(),
+        ]
+
+        for response in responses:
+            with self.subTest(response=type(response).__name__):
+                self.assertEqual(service._extract_candidate_records(response), [])
+
+    def test_provider_evidence_text_is_plain_bounded_and_readable(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        malicious = (
+            "<script>alert('bad')</script><style>body{display:none}</style>"
+            "<div>Safe&nbsp;&amp; <strong>readable</strong>\x00 text</div>"
+            "<img src=x onerror=alert(1)>   <span>nested</span> "
+            "![Poster](data:image/png;base64,private) [listing](https://private.example.test)"
+        )
+        response = {
+            "results": [
+                {
+                    "url": "https://casting.example.com/safe",
+                    "title": malicious,
+                    "excerpts": [malicious + (" long" * 1000)],
+                }
+            ]
+        }
+
+        evidence = service._extract_candidate_records(response)[0]
+
+        self.assertEqual(evidence.title, "Safe & readable text nested Poster listing")
+        self.assertEqual(len(evidence.snippet), PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH)
+        for forbidden in (
+            "<script",
+            "<style",
+            "<img",
+            "onerror",
+            "alert('bad')",
+            "display:none",
+            "data:image",
+            "private.example.test",
+            "\x00",
+        ):
+            self.assertNotIn(forbidden, evidence.title or "")
+            self.assertNotIn(forbidden, evidence.snippet or "")
+
+    def test_provider_evidence_field_bounds_and_url_policy(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        exact_url = "https://casting.example.com/" + (
+            "a" * (PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH - len("https://casting.example.com/"))
+        )
+        overlong_url = exact_url + "b"
+        response = {
+            "results": [
+                {
+                    "url": exact_url,
+                    "title": "t" * (PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH + 50),
+                    "excerpts": ["s" * (PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH + 50)],
+                    "publish_date": "2026-08-02",
+                },
+                {"url": overlong_url, "title": "Skipped"},
+            ]
+        }
+
+        records = service._extract_candidate_records(response)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(len(records[0].canonical_url), PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH)
+        self.assertEqual(len(records[0].title or ""), PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH)
+        self.assertEqual(len(records[0].snippet or ""), PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH)
+        self.assertEqual(len(records[0].published_date or ""), PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH)
+        self.assertEqual(
+            len(service._provider_plain_text("p" * 100, PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH) or ""),
+            PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH,
+        )
+        self.assertEqual(PUBLIC_WEB_PROVIDER_RESULT_ID_MAX_LENGTH, 200)
+
+    def test_first_valid_canonical_duplicate_wins_without_evidence_merge(self):
+        service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
+        response = {
+            "results": [
+                {
+                    "url": "https://casting.example.com/role#first",
+                    "title": "First title",
+                    "excerpts": ["First snippet"],
+                    "publish_date": "2026-07-30",
+                },
+                {
+                    "url": "https://casting.example.com/role#second",
+                    "title": "Second title",
+                    "excerpts": ["Second snippet"],
+                    "publish_date": "2026-08-01",
+                },
+            ]
+        }
+
+        records = service._extract_candidate_records(response)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].title, "First title")
+        self.assertEqual(records[0].snippet, "First snippet")
+        self.assertEqual(records[0].published_date, "2026-07-30")
 
     def test_actual_parallel_response_shape_extracts_urls(self):
         service = PublicWebBreakdownSearch(FakeActor(), parallel_client=FakeParallelClient())
@@ -556,6 +720,9 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
                         SimpleNamespace(
                             url="https://casting.example.com/roles/current-tv",
                             title="Current TV Role",
+                            excerpts=["<strong>Current</strong> provider context."],
+                            publish_date="2026-08-01",
+                            undocumented_payload={"raw": "discard me"},
                         )
                     ]
                 )
@@ -574,6 +741,18 @@ class PublicWebBreakdownSearchTests(unittest.TestCase):
         self.assertEqual(result.candidate_pages_found, 1)
         self.assertEqual(len(result.normalized), 1)
         self.assertEqual(result.candidate_reports[0]["page_title"], "Current TV Role")
+        self.assertEqual(result.provider_evidence[0].canonical_url, result.candidate_urls[0])
+        self.assertEqual(
+            result.candidate_reports[0]["provider_evidence"],
+            {
+                "provider": "Parallel",
+                "canonical_url": "https://casting.example.com/roles/current-tv",
+                "title": "Current TV Role",
+                "snippet": "Current provider context.",
+                "published_date": "2026-08-01",
+            },
+        )
+        self.assertNotIn("undocumented_payload", str(result.candidate_reports[0]))
 
     def test_empty_parallel_response_reports_zero_candidates(self):
         class EmptyParallelClient:

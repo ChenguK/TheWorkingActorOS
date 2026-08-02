@@ -25,6 +25,12 @@ PARALLEL_BREAKDOWN_OBJECTIVE = (
     "Prefer self-tape opportunities or in-person auditions within the actor's travel rules."
 )
 PARALLEL_ADVANCED_SETTINGS = {"max_results": 10}
+PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH = 80
+PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH = 1000
+PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH = 240
+PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH = 600
+PUBLIC_WEB_PROVIDER_RESULT_ID_MAX_LENGTH = 200
+PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH = 10
 PUBLIC_WEB_MAX_QUERY_COUNT = 6
 PUBLIC_WEB_MAX_QUERY_LENGTH = 220
 PUBLIC_WEB_MAX_ARCHETYPE_TERMS = 3
@@ -53,6 +59,25 @@ PUBLIC_WEB_OPEN_GENDER_TERMS = {
 
 
 @dataclass
+class PublicWebProviderEvidence:
+    provider: str
+    canonical_url: str
+    title: str | None = None
+    snippet: str | None = None
+    published_date: str | None = None
+
+    def as_report_dict(self) -> dict[str, str]:
+        values = {
+            "provider": self.provider,
+            "canonical_url": self.canonical_url,
+            "title": self.title,
+            "snippet": self.snippet,
+            "published_date": self.published_date,
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
+
+@dataclass
 class PublicWebSearchResult:
     configured: bool
     run: bool
@@ -60,6 +85,7 @@ class PublicWebSearchResult:
     reason: str | None = None
     search_queries: list[str] = field(default_factory=list)
     candidate_urls: list[str] = field(default_factory=list)
+    provider_evidence: list[PublicWebProviderEvidence] = field(default_factory=list)
     candidate_pages_found: int = 0
     candidates_rejected: int = 0
     candidate_reports: list[dict] = field(default_factory=list)
@@ -112,7 +138,7 @@ class PublicWebBreakdownSearch:
             },
         )
         candidates = self._extract_candidate_records(response)
-        urls = [candidate["url"] for candidate in candidates]
+        urls = [candidate.canonical_url for candidate in candidates]
         self._debug_log(
             "Parallel candidate URL extraction",
             {"candidate_url_count": len(urls), "candidate_urls": urls},
@@ -122,13 +148,14 @@ class PublicWebBreakdownSearch:
         rejected = 0
         rejection_reasons = {"fetch_failed": 0, "not_actor_facing_breakdown": 0}
         for candidate in candidates:
-            url = candidate["url"]
+            url = candidate.canonical_url
             report = {
-                "page_title": candidate.get("page_title") or self._title_from_url(url),
+                "page_title": candidate.title or self._title_from_url(url),
                 "url": url,
                 "source": "Parallel Public Web Search",
                 "decision": "Rejected",
                 "rejection_reason": "Unknown",
+                "provider_evidence": candidate.as_report_dict(),
             }
             page_text = self._fetch_visible_text(url)
             if not page_text:
@@ -161,6 +188,7 @@ class PublicWebBreakdownSearch:
             run=True,
             search_queries=queries,
             candidate_urls=urls,
+            provider_evidence=candidates,
             candidate_pages_found=len(urls),
             candidates_rejected=rejected,
             candidate_reports=candidate_reports,
@@ -447,68 +475,95 @@ class PublicWebBreakdownSearch:
                 unique.append(normalized)
         return unique[:30]
 
-    def _extract_candidate_records(self, response: Any) -> list[dict]:
-        records: list[dict] = []
+    def _extract_candidate_records(self, response: Any) -> list[PublicWebProviderEvidence]:
+        records: list[PublicWebProviderEvidence] = []
+        for result in self._documented_results(response):
+            evidence = self._provider_evidence(result)
+            if evidence:
+                records.append(evidence)
 
-        def add(url: Any, title: Any = None) -> None:
-            if not isinstance(url, str):
-                return
-            normalized = self._normalize_url(url)
-            if normalized:
-                records.append({"url": normalized, "page_title": str(title or "").strip() or None})
-
-        def visit(value: Any) -> None:
-            if value is None:
-                return
-            if hasattr(value, "model_dump"):
-                try:
-                    visit(value.model_dump())
-                    return
-                except Exception:
-                    pass
-            if isinstance(value, dict):
-                url = (
-                    value.get("url")
-                    or value.get("link")
-                    or value.get("source_url")
-                    or value.get("href")
-                )
-                if url:
-                    add(url, value.get("title") or value.get("page_title"))
-                for item in value.values():
-                    if isinstance(item, (dict, list, tuple)):
-                        visit(item)
-                return
-            if isinstance(value, (list, tuple)):
-                for item in value:
-                    visit(item)
-                return
-            url = (
-                getattr(value, "url", None)
-                or getattr(value, "link", None)
-                or getattr(value, "source_url", None)
-                or getattr(value, "href", None)
-            )
-            if url:
-                add(url, getattr(value, "title", None) or getattr(value, "page_title", None))
-            for attr in ("results", "data", "items", "search_results"):
-                if hasattr(value, attr):
-                    visit(getattr(value, attr))
-
-        visit(response)
-        unique: list[dict] = []
+        unique: list[PublicWebProviderEvidence] = []
         seen: set[str] = set()
         for record in records:
-            url = record["url"]
+            url = record.canonical_url
             if url not in seen:
                 seen.add(url)
                 unique.append(record)
         return unique[:30]
 
+    def _documented_results(self, response: Any) -> list[Any]:
+        results = (
+            response.get("results")
+            if isinstance(response, dict)
+            else getattr(response, "results", None)
+        )
+        return list(results) if isinstance(results, (list, tuple)) else []
+
+    def _provider_evidence(self, result: Any) -> PublicWebProviderEvidence | None:
+        if isinstance(result, dict):
+            url = result.get("url")
+            title = result.get("title")
+            excerpts = result.get("excerpts")
+            published_date = result.get("publish_date")
+        else:
+            url = getattr(result, "url", None)
+            title = getattr(result, "title", None)
+            excerpts = getattr(result, "excerpts", None)
+            published_date = getattr(result, "publish_date", None)
+        if not isinstance(url, str):
+            return None
+        canonical_url = self._normalize_url(url)
+        if not canonical_url:
+            return None
+        snippet = None
+        if isinstance(excerpts, (list, tuple)):
+            snippet = next(
+                (
+                    cleaned
+                    for excerpt in excerpts
+                    if (
+                        cleaned := self._provider_plain_text(
+                            excerpt, PUBLIC_WEB_PROVIDER_SNIPPET_MAX_LENGTH
+                        )
+                    )
+                ),
+                None,
+            )
+        return PublicWebProviderEvidence(
+            provider=self._provider_plain_text("Parallel", PUBLIC_WEB_PROVIDER_NAME_MAX_LENGTH)
+            or "Parallel",
+            canonical_url=canonical_url,
+            title=self._provider_plain_text(title, PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH),
+            snippet=snippet,
+            published_date=self._provider_date(published_date),
+        )
+
+    def _provider_plain_text(self, value: Any, maximum: int) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?(?:</\1\s*>|$)", " ", value)
+        text = re.sub(r"(?s)<[^>]*>", " ", text)
+        text = html.unescape(text)
+        text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        text = text.replace("`", "")
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:maximum].rstrip() or None
+
+    def _provider_date(self, value: Any) -> str | None:
+        if not isinstance(value, str) or len(value) > PUBLIC_WEB_PROVIDER_DATE_MAX_LENGTH:
+            return None
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError:
+            return None
+
     def _title_from_url(self, url: str) -> str:
         parsed = urlparse(url)
         path = parsed.path.strip("/").split("/")[-1].replace("-", " ").replace("_", " ")
-        return path.title() if path else parsed.netloc.removeprefix("www.")
+        title = path.title() if path else parsed.netloc.removeprefix("www.")
+        return title[:PUBLIC_WEB_PROVIDER_TITLE_MAX_LENGTH]
 
     def _response_summary(self, response: Any) -> dict:
         if hasattr(response, "model_dump"):
@@ -624,6 +679,8 @@ class PublicWebBreakdownSearch:
         return "Unknown"
 
     def _normalize_url(self, url: str) -> str | None:
+        if len(url) > PUBLIC_WEB_PROVIDER_URL_MAX_LENGTH:
+            return None
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return None

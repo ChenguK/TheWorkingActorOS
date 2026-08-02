@@ -138,6 +138,87 @@ describe("AutomationDashboard discovery state", () => {
     expect(screen.getByText("87%")).toBeInTheDocument();
   });
 
+  it("shows bounded provider evidence with the canonical source link", async () => {
+    const resultWithEvidence: DiscoveryRunResult = {
+      ...discoveryResult,
+      discovery_report: {
+        ...discoveryResult.discovery_report!,
+        candidates: [{
+          page_title: "Fallback title",
+          url: "https://casting.example.test/uncanonical#fragment",
+          source: "Parallel Public Web Search",
+          decision: "Accepted",
+          rejection_reason: null,
+          provider_evidence: {
+            provider: "Parallel",
+            canonical_url: "https://casting.example.test/role",
+            title: "Fictional Feature Role",
+            snippet: "A provider-supplied summary, not verified page content.",
+            published_date: "2026-08-01"
+          }
+        }]
+      }
+    };
+    vi.mocked(useBreakdownDiscovery).mockReturnValue({
+      discovering: false,
+      error: null,
+      clearError: vi.fn(),
+      run: vi.fn(async () => resultWithEvidence)
+    });
+    const { user } = renderDashboard();
+
+    await user.click(screen.getByRole("button", { name: "Find Film/TV Breakdowns" }));
+    await user.click(await screen.findByRole("button", { name: "View Discovery Report" }));
+
+    expect(screen.getByRole("link", { name: "Fictional Feature Role" })).toHaveAttribute("href", "https://casting.example.test/role");
+    expect(screen.getByText("Search provider: Parallel")).toBeInTheDocument();
+    expect(screen.getByText(/A provider-supplied summary/)).toBeInTheDocument();
+    expect(screen.getByText(/Provider publication date: 2026-08-01/)).toBeInTheDocument();
+  });
+
+  it("renders provider text inertly and hides absent optional evidence labels", async () => {
+    const resultWithCandidates: DiscoveryRunResult = {
+      ...discoveryResult,
+      discovery_report: {
+        ...discoveryResult.discovery_report!,
+        candidates: [
+          {
+            url: "https://casting.example.test/safe",
+            decision: "Rejected",
+            rejection_reason: "Fetch failed",
+            provider_evidence: {
+              provider: "Parallel",
+              canonical_url: "https://casting.example.test/safe",
+              snippet: "<img onerror=alert(1)> plain context"
+            }
+          },
+          {
+            page_title: "Legacy candidate",
+            url: "https://casting.example.test/legacy",
+            source: "Parallel Public Web Search",
+            decision: "Accepted"
+          }
+        ]
+      }
+    };
+    vi.mocked(useBreakdownDiscovery).mockReturnValue({
+      discovering: false,
+      error: null,
+      clearError: vi.fn(),
+      run: vi.fn(async () => resultWithCandidates)
+    });
+    const { user, container } = renderDashboard();
+
+    await user.click(screen.getByRole("button", { name: "Find Film/TV Breakdowns" }));
+    await user.click(await screen.findByRole("button", { name: "View Discovery Report" }));
+
+    expect(screen.getByText(/<img onerror=alert\(1\)> plain context/)).toBeInTheDocument();
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Legacy candidate" })).toHaveAttribute("href", "https://casting.example.test/legacy");
+    expect(screen.getAllByText(/Search-result context:/)).toHaveLength(1);
+    expect(screen.queryByText(/Provider publication date:/)).not.toBeInTheDocument();
+  });
+
   it("composes the submission queue workspace without coupling it to discovery success", () => {
     vi.mocked(useBreakdownDiscovery).mockReturnValue({
       discovering: false,

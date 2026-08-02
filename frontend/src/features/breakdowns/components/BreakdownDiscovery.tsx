@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Sparkles } from "lucide-react";
 import { Badge, Button, Field, Section, inputClass } from "../../../components/ui";
 import { SourceEditForm, SourceLibraryPanel, type SourceEditFormState, useActivateSourceResearchItem, useDiscoverNewSources, useRejectSourceResearchItem, useUpdateSourceResearchItem } from "../../source-library";
-import type { AgentRecommendation, DiscoveryCoverage, DiscoveryMode, DiscoveryPlugin, DiscoveryReport, DiscoverySearchMode, Opportunity, SourceResearchItem, SubmissionAutomationQueueItem, SystemCapabilities } from "../types";
+import type { AgentRecommendation, DiscoveryCandidateReport, DiscoveryCoverage, DiscoveryMode, DiscoveryPlugin, DiscoveryReport, DiscoverySearchMode, Opportunity, SourceResearchItem, SubmissionAutomationQueueItem, SystemCapabilities } from "../types";
 import { discoverySearchModes } from "../constants";
 import { useBreakdownDiscovery } from "../hooks/useBreakdownDiscovery";
 import { TextAction, humanizeKey } from "./BreakdownDetails";
@@ -45,30 +45,47 @@ function DiscoveryReportPanel({ report }: { report: DiscoveryReport }) {
           {report.candidates.length === 0 ? (
             <p className="text-slate-500">No candidate pages were returned for this run.</p>
           ) : report.candidates.slice(0, 30).map((candidate, index) => (
-            <div key={`${candidate.url || candidate.page_title || "candidate"}-${index}`} className="rounded border border-slate-200 bg-slate-50 p-2">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <p className="font-semibold text-slate-900">
-                    {candidate.url ? (
-                      <a className="break-words text-accent hover:underline" href={candidate.url} target="_blank" rel="noreferrer">
-                        {candidate.page_title || candidate.url}
-                      </a>
-                    ) : candidate.page_title || "Candidate page"}
-                  </p>
-                  <p className="text-slate-500">{candidate.source || "Unknown source"}</p>
-                </div>
-                <Badge>{candidate.decision || "Unknown"}</Badge>
-              </div>
-              <p className="mt-1">
-                <span className="font-semibold">Reason:</span> {candidate.rejection_reason || "Accepted"}
-              </p>
-              {candidate.parser_confidence != null && (
-                <p className="mt-1 text-slate-500">Parser confidence: {candidate.parser_confidence}%</p>
-              )}
-            </div>
+            <DiscoveryCandidateCard key={`${candidate.url || candidate.page_title || "candidate"}-${index}`} candidate={candidate} />
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiscoveryCandidateCard({ candidate }: { candidate: DiscoveryCandidateReport }) {
+  const evidence = candidate.provider_evidence;
+  const canonicalUrl = evidence?.canonical_url || candidate.url;
+  const title = evidence?.title || candidate.page_title || canonicalUrl;
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 p-2">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="font-semibold text-slate-900">
+            {canonicalUrl ? (
+              <a className="break-words text-accent hover:underline" href={canonicalUrl} target="_blank" rel="noreferrer">
+                {title}
+              </a>
+            ) : title || "Candidate page"}
+          </p>
+          <p className="text-slate-500">
+            {evidence?.provider ? `Search provider: ${evidence.provider}` : candidate.source || "Unknown source"}
+          </p>
+        </div>
+        <Badge>{candidate.decision || "Unknown"}</Badge>
+      </div>
+      {evidence?.snippet && (
+        <p className="mt-1 text-slate-600"><span className="font-semibold">Search-result context:</span> {evidence.snippet}</p>
+      )}
+      {evidence?.published_date && (
+        <p className="mt-1 text-slate-500">Provider publication date: {evidence.published_date}</p>
+      )}
+      <p className="mt-1">
+        <span className="font-semibold">Reason:</span> {candidate.rejection_reason || "Accepted"}
+      </p>
+      {candidate.parser_confidence != null && (
+        <p className="mt-1 text-slate-500">Parser confidence: {candidate.parser_confidence}%</p>
+      )}
     </div>
   );
 }

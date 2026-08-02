@@ -63,6 +63,13 @@ export type DiscoveryCandidateReport = {
   page_title?: string | null;
   url?: string | null;
   source?: string | null;
+  provider_evidence?: {
+    provider: string;
+    canonical_url: string;
+    title?: string;
+    snippet?: string;
+    published_date?: string;
+  } | null;
   decision?: "Accepted" | "Rejected" | "Parsed" | string;
   rejection_reason?: string | null;
   parser_confidence?: number | null;
