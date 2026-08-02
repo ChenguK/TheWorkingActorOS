@@ -18,7 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { BookOpenCheck, BriefcaseBusiness, Clapperboard, FilePlus2, FolderUp, GripVertical, Lightbulb, RotateCcw, Search, SlidersHorizontal, Sparkles } from "lucide-react";
 import { Badge, Button, EmptyState } from "../../../components/ui";
-import type { DashboardWidget, FocusModeName } from "../../../types/domain";
+import type { CommandCenterCard, DashboardWidget, FocusModeName, OpportunityIntelligenceSummary } from "../../../types/domain";
 import type { ActorRelationship, AuditionCalendarEvent, SourceResearchItem } from "../../../types/domain";
 import type { IndustryTrendDashboard, IntelligenceDashboard, OperationsDashboard } from "../../../types/domain";
 import { useIndustryTrends, useIntelligenceDashboard, useOperationsDashboard } from "../../analytics";
@@ -90,10 +90,8 @@ const widgetDefinitions: WidgetDefinition[] = [
     id: "todays_priorities",
     linkTo: "/breakdowns",
     render: (data) => (
-      <WidgetBody
-        metric={data.commandCenter?.today_opportunities.length ?? 0}
-        items={(data.commandCenter?.today_opportunities ?? []).slice(0, 3).map((item) => `${item.role ?? "Role"} · ${item.project ?? "Project"}`)}
-        empty="No priority breakdowns today."
+      <OpportunityPrioritiesWidget
+        opportunities={data.commandCenter?.today_opportunities ?? []}
       />
     )
   },
@@ -624,6 +622,89 @@ function WidgetBody({ metric, items, empty }: { metric: number; items: string[];
         )}
       </div>
     </div>
+  );
+}
+
+function OpportunityPrioritiesWidget({ opportunities }: { opportunities: CommandCenterCard[] }) {
+  return (
+    <div className="flex flex-1 flex-col">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-3xl font-bold text-ink">{opportunities.length}</p>
+        {opportunities.length > 0 && <Badge>Active</Badge>}
+      </div>
+      <div className="mt-3 grid gap-2 text-sm text-slate-700">
+        {opportunities.length === 0 ? (
+          <p className="text-slate-500">No priority breakdowns today.</p>
+        ) : opportunities.slice(0, 3).map((opportunity, index) => (
+          <OpportunityPriorityCard
+            key={opportunity.id ?? `${opportunity.role ?? "role"}-${index}`}
+            opportunity={opportunity}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function OpportunityPriorityCard({ opportunity }: { opportunity: CommandCenterCard }) {
+  const intelligence = isVersionOneIntelligence(opportunity.intelligence)
+    ? opportunity.intelligence
+    : null;
+  const contributors = intelligence
+    ? [
+        ...intelligence.top_positive_contributors.map((item) => ({ ...item, kind: "Positive" })),
+        ...intelligence.top_negative_contributors.map((item) => ({ ...item, kind: "Negative" }))
+      ]
+    : [];
+
+  return (
+    <div className="rounded bg-slate-50 px-2 py-1">
+      <p className="font-medium text-ink">{String(opportunity.role ?? "Role")}</p>
+      <p>{String(opportunity.project ?? "Project")}</p>
+      {intelligence && (
+        <div
+          className="mt-1 grid gap-1"
+          aria-label={`Opportunity intelligence: ${intelligence.action_label}; score ${intelligence.overall_score} of 100`}
+        >
+          <p><span className="font-semibold">{intelligence.action_label}</span></p>
+          <p>Score {intelligence.overall_score} of 100 · {intelligence.confidence.level} confidence</p>
+          {intelligence.hard_override_reason && (
+            <p>Reason: {intelligence.hard_override_reason.split("_").join(" ")}</p>
+          )}
+          {contributors.length > 0 && (
+            <details>
+              <summary className="cursor-pointer font-medium">Why this score</summary>
+              <ul className="mt-1 grid gap-1">
+                {contributors.map((contributor) => (
+                  <li key={`${contributor.kind}-${contributor.id}`}>
+                    {contributor.kind}: {contributor.explanation ?? contributor.id} ({contributor.points > 0 ? "+" : ""}{contributor.points})
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isVersionOneIntelligence(
+  value: CommandCenterCard["intelligence"]
+): value is OpportunityIntelligenceSummary {
+  return Boolean(
+    value
+      && value.version === 1
+      && "overall_score" in value
+      && typeof value.overall_score === "number"
+      && value.overall_score >= 0
+      && value.overall_score <= 100
+      && "action_label" in value
+      && "confidence" in value
+      && "top_positive_contributors" in value
+      && Array.isArray(value.top_positive_contributors)
+      && "top_negative_contributors" in value
+      && Array.isArray(value.top_negative_contributors)
   );
 }
 

@@ -1,7 +1,8 @@
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import TimestampedModel
 
@@ -353,8 +354,89 @@ class AssetPerformanceRead(BaseModel):
     callback_rate: float
 
 
+class CommandCenterIntelligenceContributorRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(max_length=120)
+    points: int
+    explanation: str | None = Field(default=None, max_length=240)
+
+
+class CommandCenterIntelligenceConfidenceRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: Literal["High", "Medium", "Low", "Not Scored"]
+    summary: str = Field(max_length=160)
+
+
+class CommandCenterIntelligenceSummaryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    overall_score: int = Field(ge=0, le=100)
+    action: Literal[
+        "ignore",
+        "save_for_later",
+        "good_stretch_role",
+        "apply_now",
+        "review_today",
+        "low_priority",
+    ]
+    action_label: Literal[
+        "Ignore",
+        "Save for Later",
+        "Good Stretch Role",
+        "Apply Now",
+        "Review Today",
+        "Low Priority",
+    ]
+    action_reason_code: Literal[
+        "hard_override",
+        "duplicate_opportunity",
+        "already_tracked",
+        "strategic_stretch",
+        "high_priority_actionable",
+        "strong_score_review",
+        "urgent_deadline_review",
+        "promising_not_urgent",
+        "limited_current_value",
+    ]
+    confidence: CommandCenterIntelligenceConfidenceRead
+    hard_override: bool
+    hard_override_reason: Literal[
+        "user_rejected",
+        "expired",
+        "rejected_classification",
+        "profile_incompatibility",
+        "availability_conflict",
+        "travel_limit",
+        "discarded",
+    ] | None = None
+    top_positive_contributors: list[CommandCenterIntelligenceContributorRead] = Field(
+        max_length=3
+    )
+    top_negative_contributors: list[CommandCenterIntelligenceContributorRead] = Field(
+        max_length=3
+    )
+
+
+class CommandCenterOpportunityCardRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    role: str
+    project: str
+    original_post_url: str | None
+    priority: str
+    urgency_score: int
+    quality_score: int
+    confidence_level: str
+    risk_level: str
+    intelligence: CommandCenterIntelligenceSummaryRead | None = None
+
+
 class ActorCommandCenterRead(BaseModel):
-    today_opportunities: list[dict]
+    today_opportunities: list[CommandCenterOpportunityCardRead]
     executive_priorities: list[dict]
     chief_of_staff_priorities: list[dict] = []
     since_last_visit: list[dict] = []

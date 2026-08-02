@@ -101,6 +101,7 @@ The proposed contract is:
     "version": 1,
     "overall_score": 87,
     "action": "apply_now",
+    "action_label": "Apply Now",
     "action_reason_code": "high_priority_actionable",
     "confidence": {
       "level": "High",
@@ -120,7 +121,7 @@ The proposed contract is:
 }
 ```
 
-`version` is a distinct command-center intelligence contract version, not the discovery-evidence version. It begins at integer `1`. `overall_score` is 0–100. `action` uses the existing six serialized `SuggestedAction` values; the frontend derives human-readable labels, so the API does not duplicate an `action_label`. `action_reason_code` and hard-override reasons use current bounded enums. Confidence preserves the current `High`, `Medium`, `Low`, or `Not Scored` domain values. Contributor arrays are capped at three positive and three negative entries. Contributor `explanation` is optional and appears only for an approved public-safe template. Unknown versions must be treated as absent by the frontend. Adding or omitting the nested projection requires no data migration and no persisted score.
+`version` is a distinct command-center intelligence contract version, not the discovery-evidence version. It begins at integer `1`. `overall_score` is 0–100. `action` uses the existing six serialized `SuggestedAction` values and `action_label` carries the matching bounded display label. `action_reason_code` and hard-override reasons use bounded public codes. Confidence preserves the current `High`, `Medium`, `Low`, or `Not Scored` domain values. Contributor arrays are capped at three positive and three negative entries. Contributor `explanation` is optional and appears only for an approved public-safe template. Unknown versions must be treated as absent by the frontend. Adding or omitting the nested projection requires no data migration and no persisted score.
 
 ### Absent, neutral, override, duplicate, and tracked states
 
@@ -162,6 +163,18 @@ Backward compatibility requires old responses to keep rendering, new optional pr
 Backend contract tests must cover evaluated summary, absent and explicit-null intelligence, neutral baseline, each hard override, retained duplicate, every tracked status, maximum contributors, version serialization, unknown-version documentation, privacy sentinels, payload bounds, unchanged card fields, and an additive-only OpenAPI diff. Backend unit tests must verify public factor allowlisting/redaction and prove serialization does not mutate scores or ORM records.
 
 Frontend unit tests must cover all six actions, score bounds, contributor disclosure, hard override, absent and neutral fallback, unsupported version, color-independent and screen-reader labels, keyboard disclosure, mobile-safe content order, and old fixtures against updated optional types. Playwright must use the same single `GET /command-center` request to cover a populated projection, absent-field compatibility, retained backend order, and strict unknown-request rejection. Compatibility tests must run the old frontend fixture against the new optional backend schema, the old response fixture against updated TypeScript types, and assert that OpenAPI changes are additive only.
+
+## Task 8 — Expose bounded command-center intelligence summaries
+
+The existing `GET /api/v1/command-center` route now adds only `today_opportunities[].intelligence`. The field is nullable and uses an explicit version-1 Pydantic schema. Existing card fields, route orchestration, ranking order, the 100-candidate ceiling, the eight-card display ceiling, and the 24/28 SELECT boundaries remain unchanged.
+
+The request-local ranking path retains both `Opportunity UUID → Opportunity` and `Opportunity UUID → completed OpportunityScore`. It ranks the completed entries, selects eight, and passes the exact retained score to `_opportunity_card()`. Serialization never calls the scorer, queries the database, mutates an ORM record, or persists the score.
+
+The version-1 summary contains `version`, `overall_score`, `action`, `action_label`, `action_reason_code`, generic confidence level/summary, bounded hard-override state, and at most three positive and three negative contributors. A maximum-factor fixture serializes to 558 compact UTF-8 JSON bytes and eight copies serialize to 4,473 bytes; neutral and hard-override fixtures serialize to 364 and 353 bytes. Each summary is capped at 2,048 bytes, materially below the characterized 4,927-byte full-score payload. Full categories, factor collections, priorities, caps, ranking keys, evaluation time, context, and internal explanations remain private.
+
+Contributor serialization is allowlist-first. Operational role-fit, modality, deadline, compensation, travel-support, parser, trust, source, and completeness factors receive fixed generic prose. Sensitive demographic, language, union, role-preference, goal, dream-target, watch-list, feedback, and travel-threshold values never pass through; their bounded factor ID and points may remain without an explanation when already present in the completed top-three contributors. The serializer does not refill contributor positions after filtering. Demographic and excluded-role hard overrides map to `profile_incompatibility`; internal text and profile values remain private.
+
+No actor produces `intelligence: null`; an evaluated neutral score produces a populated score-50 projection. The frontend renders absent and explicit-null values as the unchanged legacy card, and treats unsupported versions the same way without another request. Version 1 preserves role and project first, then shows visible action, numeric score, confidence, an assistive action/score label, and a semantic `details/summary` contributor disclosure. Hard overrides show only a bounded generic reason. The strict browser contract remains one `GET /command-center` request.
 
 ## Deferred phases
 

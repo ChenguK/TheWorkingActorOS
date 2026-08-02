@@ -25,21 +25,20 @@ const intelligenceNames = [
 ];
 
 describe("command-center intelligence API boundary", () => {
-  it("keeps current frontend production types and consumers intelligence-free", () => {
+  it("keeps intelligence additive on the existing frontend owner", () => {
     const domain = sources["../../types/domain.ts"];
     const api = sources["./api/index.ts"];
     const hook = sources["./hooks/useCommandCenter.ts"];
     const dashboard = sources["../dashboard/components/DashboardPanel.tsx"];
 
-    expect(domain).toContain("export type CommandCenterCard = Record<string, string | number | null | undefined>");
+    expect(domain).toContain("intelligence?: OpportunityIntelligenceSummary | null | { version: number }");
     expect(domain).toContain("today_opportunities: CommandCenterCard[]");
     expect(api).toContain('api.get<ActorCommandCenter>("/command-center")');
     expect(api).not.toMatch(/command-center.*intelligence|intelligence.*command-center/i);
     expect(hook).toContain("queryFn: getCommandCenter");
-    expect(dashboard).toContain('`${item.role ?? "Role"} · ${item.project ?? "Project"}`');
-    for (const field of intelligenceNames) {
-      expect(`${domain}\n${api}\n${hook}\n${dashboard}`).not.toContain(field);
-    }
+    expect(dashboard).toContain("OpportunityPriorityCard");
+    expect(dashboard).toContain("isVersionOneIntelligence(opportunity.intelligence)");
+    expect(`${api}\n${hook}`).not.toMatch(/command-center.*intelligence|intelligence.*command-center/i);
   });
 
   it("keeps strict Playwright request and response fixtures on the current contract", () => {
@@ -48,14 +47,13 @@ describe("command-center intelligence API boundary", () => {
 
     expect(mockApi).toContain('"GET /command-center"');
     expect(mockApi).toContain('path === "/command-center" && method === "GET"');
-    expect(mockApi).toContain("today_opportunities: []");
+    expect(mockApi).toContain("today_opportunities: [");
+    expect(mockApi).toContain("intelligence: { version: 1");
     expect(requestGraphs).toContain('["GET /command-center"]).toBe(1)');
     expect(`${mockApi}\n${requestGraphs}`).not.toMatch(
       /command-center\/(?:intelligence|scores|history)/
     );
-    for (const field of intelligenceNames) {
-      expect(mockApi).not.toContain(field);
-    }
+    expect(intelligenceNames).toContain("overall_score");
   });
 
   it("documents runtime additive-field tolerance without requiring it in current types", () => {

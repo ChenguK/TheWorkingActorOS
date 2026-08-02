@@ -26,3 +26,21 @@ test("widget preferences stay independent from feature mutations", async ({ page
   await page.getByRole("button", { name: "Add Self-Tape" }).click();
   expect(state.requests.filter((request) => request.includes("/dashboard/widgets"))).toHaveLength(widgetRequestsBefore);
 });
+
+test("command-center intelligence preserves one strict request and legacy fallbacks", async ({ page }) => {
+  const state = await installMockApi(page);
+  await page.goto("/");
+
+  await expect(page.getByText("Detective")).toBeVisible();
+  await expect(page.getByText("Fictional Procedural")).toBeVisible();
+  await expect(page.getByText("Apply Now")).toBeVisible();
+  await expect(page.getByText("Score 87 of 100 · High confidence")).toBeVisible();
+  await page.getByText("Why this score").click();
+  await expect(page.getByText(/Positive: The strongest parsed role is a strong fit/)).toBeVisible();
+  await expect(page.getByText("Doctor")).toBeVisible();
+  await expect(page.getByText("Attorney")).toBeVisible();
+  await expect(page.getByText("Score 87 of 100 · High confidence")).toHaveCount(1);
+
+  expect(state.requests.filter((request) => request === "GET /command-center")).toHaveLength(1);
+  expect(state.requests.some((request) => request.includes("command-center/intelligence"))).toBe(false);
+});

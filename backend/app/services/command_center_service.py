@@ -25,8 +25,12 @@ from app.agents.executive_agent import ExecutiveAgent
 from app.core.constants import CALLBACK_STATUSES, OPEN_SUBMISSION_STATUSES
 from app.repositories.opportunity import MAIN_BREAKDOWN_CLASSIFICATIONS
 from app.services.opportunity_intelligence_service import OpportunityIntelligenceService
+from app.services.opportunity_intelligence_summary import (
+    serialize_command_center_intelligence,
+)
 from app.services.opportunity_score import (
     FeedbackScoringEntry,
+    OpportunityScore,
     OpportunityScoringContext,
     WatchListScoringMatch,
     build_opportunity_ranking_entry,
@@ -79,7 +83,7 @@ class CommandCenterService:
             raise ValueError("since_at must be timezone-aware")
         now = as_of
         soon = now + timedelta(days=14)
-        visible_opportunities = self._ranked_opportunities(
+        visible_opportunities = self._ranked_opportunity_batch(
             self.read_opportunity_candidates(), actor, as_of=now
         )
         queued = list(
@@ -128,7 +132,10 @@ class CommandCenterService:
         since_last_visit = self._since_last_visit(since_at, asset_performance)
         priorities = ExecutiveAgent(self.db).read_top_priorities(as_of=now)
         return {
-            "today_opportunities": [self._opportunity_card(item) for item in visible_opportunities],
+            "today_opportunities": [
+                self._opportunity_card(item, score)
+                for item, score in visible_opportunities
+            ],
             "executive_priorities": priorities,
             "chief_of_staff_priorities": priorities,
             "since_last_visit": since_last_visit,
@@ -163,18 +170,36 @@ class CommandCenterService:
         *,
         as_of: datetime,
     ) -> list[Opportunity]:
+        return [
+            opportunity
+            for opportunity, _score in self._ranked_opportunity_batch(
+                candidates, actor, as_of=as_of
+            )
+        ]
+
+    def _ranked_opportunity_batch(
+        self,
+        candidates: list[Opportunity],
+        actor: ActorProfile | None,
+        *,
+        as_of: datetime,
+    ) -> list[tuple[Opportunity, OpportunityScore | None]]:
         if not candidates:
             return []
         if actor is None:
-            return sorted(
-                candidates,
-                key=lambda item: (-item.urgency_score, -item.quality_score),
-            )[:COMMAND_CENTER_DISPLAY_LIMIT]
+            return [
+                (candidate, None)
+                for candidate in sorted(
+                    candidates,
+                    key=lambda item: (-item.urgency_score, -item.quality_score),
+                )[:COMMAND_CENTER_DISPLAY_LIMIT]
+            ]
 
         contexts = self._read_scoring_contexts(candidates, actor)
         intelligence = OpportunityIntelligenceService(self.db)
         entries = []
         candidates_by_id = {}
+        scores_by_id = {}
         for candidate in candidates:
             score = intelligence.score(
                 candidate,
@@ -186,9 +211,13 @@ class CommandCenterService:
                 build_opportunity_ranking_entry(candidate, score, as_of=as_of)
             )
             candidates_by_id[candidate.id] = candidate
+            scores_by_id[candidate.id] = score
         ranked = rank_opportunity_entries(entries)
         return [
-            candidates_by_id[entry.opportunity_id]
+            (
+                candidates_by_id[entry.opportunity_id],
+                scores_by_id[entry.opportunity_id],
+            )
             for entry in ranked[:COMMAND_CENTER_DISPLAY_LIMIT]
         ]
 
@@ -554,7 +583,21 @@ class CommandCenterService:
             return datetime.max.replace(tzinfo=timezone.utc)
         return min(item if item.tzinfo else item.replace(tzinfo=timezone.utc) for item in values)
 
-    def _opportunity_card(self, opportunity: Opportunity) -> dict:
+    def _opportunity_card(
+        self,
+        opportunity: Opportunity,
+        score: OpportunityScore | None,
+    ) -> dict:
+        return {
+            **self._opportunity_base_card(opportunity),
+            "intelligence": (
+                serialize_command_center_intelligence(score)
+                if score is not None
+                else None
+            ),
+        }
+
+    def _opportunity_base_card(self, opportunity: Opportunity) -> dict:
         return {
             "id": opportunity.id,
             "role": opportunity.role,
@@ -569,7 +612,7 @@ class CommandCenterService:
 
     def _deadline_card(self, opportunity: Opportunity) -> dict:
         return {
-            **self._opportunity_card(opportunity),
+            **self._opportunity_base_card(opportunity),
             "submission_deadline": opportunity.submission_deadline,
             "audition_deadline": opportunity.audition_deadline,
         }

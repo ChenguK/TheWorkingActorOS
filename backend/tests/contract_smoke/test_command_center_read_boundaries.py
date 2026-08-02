@@ -213,6 +213,37 @@ def test_ranked_snapshot_query_count_is_bounded_independently_of_candidates(db, 
     assert select_count == (24 if candidate_count == 0 else 28)
     assert all("overall_score" not in card for card in result["today_opportunities"])
     assert all("suggested_action" not in card for card in result["today_opportunities"])
+    assert all(card["intelligence"]["version"] == 1 for card in result["today_opportunities"])
+
+
+def test_snapshot_scores_each_candidate_exactly_once(db, monkeypatch):
+    from app.services.command_center_service import CommandCenterService
+    from app.services.opportunity_intelligence_service import OpportunityIntelligenceService
+
+    actor = _actor()
+    candidates = [_opportunity(index) for index in range(9)]
+    db.add(actor)
+    db.add_all(candidates)
+    db.commit()
+    original = OpportunityIntelligenceService.score
+    calls = []
+
+    def tracked_score(self, candidate, *args, **kwargs):
+        calls.append(candidate.id)
+        return original(self, candidate, *args, **kwargs)
+
+    monkeypatch.setattr(OpportunityIntelligenceService, "score", tracked_score)
+
+    result = CommandCenterService(db).read_snapshot(
+        actor=actor,
+        as_of=AS_OF,
+        since_at=AS_OF - timedelta(days=7),
+    )
+
+    assert len(calls) == 9
+    assert len(set(calls)) == 9
+    assert len(result["today_opportunities"]) == 8
+    assert all(card["intelligence"] is not None for card in result["today_opportunities"])
 
 
 def test_full_candidate_set_is_ranked_before_existing_eight_card_limit(db):

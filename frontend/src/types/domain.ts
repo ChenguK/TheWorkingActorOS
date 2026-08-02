@@ -793,7 +793,42 @@ export type AssetPerformance = {
   callback_rate: number;
 };
 
-export type CommandCenterCard = Record<string, string | number | null | undefined>;
+export type OpportunityIntelligenceAction =
+  | "ignore"
+  | "save_for_later"
+  | "good_stretch_role"
+  | "apply_now"
+  | "review_today"
+  | "low_priority";
+
+export type OpportunityIntelligenceContributor = {
+  id: string;
+  points: number;
+  explanation?: string | null;
+};
+
+export type OpportunityIntelligenceSummary = {
+  version: 1;
+  overall_score: number;
+  action: OpportunityIntelligenceAction;
+  action_label: string;
+  action_reason_code: string;
+  confidence: {
+    level: "High" | "Medium" | "Low" | "Not Scored";
+    summary: string;
+  };
+  hard_override: boolean;
+  hard_override_reason?: string | null;
+  top_positive_contributors: OpportunityIntelligenceContributor[];
+  top_negative_contributors: OpportunityIntelligenceContributor[];
+};
+
+export type CommandCenterCard = Record<string, unknown> & {
+  id?: string;
+  role?: string | null;
+  project?: string | null;
+  intelligence?: OpportunityIntelligenceSummary | null | { version: number };
+};
 
 export type ExecutivePriority = {
   rank: number;

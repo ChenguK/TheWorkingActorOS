@@ -342,7 +342,11 @@ async function handle(request: Request, path: string, state: MockState): Promise
     return { body: { id: "focus-1", active_mode: state.focusMode, created_at: now, updated_at: now } };
   }
   if (path === "/dashboard/widgets" && method === "GET") return { body: dashboardWidgets() };
-  if (path === "/command-center" && method === "GET") return { body: { today_opportunities: [], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] } };
+  if (path === "/command-center" && method === "GET") return { body: { today_opportunities: [
+    { id: "intelligence-1", role: "Detective", project: "Fictional Procedural", intelligence: { version: 1, overall_score: 87, action: "apply_now", action_label: "Apply Now", action_reason_code: "high_priority_actionable", confidence: { level: "High", summary: "This recommendation is supported by strong and complete opportunity information." }, hard_override: false, hard_override_reason: null, top_positive_contributors: [{ id: "match.role_fit.strong", points: 18, explanation: "The strongest parsed role is a strong fit." }], top_negative_contributors: [] } },
+    { id: "legacy-2", role: "Doctor", project: "Legacy Drama" },
+    { id: "future-3", role: "Attorney", project: "Future Contract", intelligence: { version: 2 } }
+  ], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] } };
   if (path === "/operations/equipment-profile" && method === "GET") return { body: null };
   if (/^\/travel-preferences\/[^/]+$/.test(path) && method === "GET") return { body: null };
   if (path === "/operations/dashboard" && method === "GET") return { body: null };
@@ -472,4 +476,7 @@ const discoveryResultFixture = () => ({
     ]
   }
 });
-const dashboardWidgets = () => [{ id: "widget-1", widget_id: "quick_actions", display_name: "Quick Actions", enabled: true, sort_order: 0, size: "medium", created_at: now, updated_at: now }];
+const dashboardWidgets = () => [
+  { id: "widget-1", widget_id: "quick_actions", display_name: "Quick Actions", enabled: true, sort_order: 0, size: "medium", created_at: now, updated_at: now },
+  { id: "widget-2", widget_id: "todays_priorities", display_name: "Today's Priorities", enabled: true, sort_order: 1, size: "medium", created_at: now, updated_at: now }
+];

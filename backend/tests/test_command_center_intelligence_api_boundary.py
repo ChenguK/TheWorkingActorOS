@@ -9,11 +9,19 @@ import pytest
 
 from app.schemas.agent import ActorCommandCenterRead
 from app.services.command_center_service import CommandCenterService
+from app.services.opportunity_intelligence_summary import (
+    ACTION_LABELS,
+    COMMAND_CENTER_INTELLIGENCE_MAX_BYTES,
+    serialize_command_center_intelligence,
+)
 from app.services.opportunity_score import (
     FeedbackScoringEntry,
     OpportunityActionContext,
     OpportunityScoringContext,
+    ScoreConfidence,
     ScoringContextMatch,
+    SuggestedAction,
+    SuggestedActionResult,
     WatchListScoringMatch,
     build_opportunity_score,
     score_opportunity,
@@ -215,45 +223,48 @@ def payload_measurements() -> dict[str, int]:
 
 def test_current_command_center_schema_and_card_field_sets_are_exact():
     item = opportunity()
-    card = CommandCenterService(db=None)._opportunity_card(item)
+    score = build_opportunity_score(opportunity_id=str(item.id))
+    card = CommandCenterService(db=None)._opportunity_card(item, score)
 
     assert set(ActorCommandCenterRead.model_fields) == CURRENT_RESPONSE_FIELDS
-    assert set(card) == CURRENT_CARD_FIELDS
-    assert not (set(card) & FORBIDDEN_INTELLIGENCE_FIELDS)
-    assert ActorCommandCenterRead.model_json_schema()["properties"]["today_opportunities"][
-        "items"
-    ] == {"additionalProperties": True, "type": "object"}
+    assert set(card) == CURRENT_CARD_FIELDS | {"intelligence"}
+    assert set(card) - {"intelligence"} == CURRENT_CARD_FIELDS
+    assert card["intelligence"]["version"] == 1
 
 
-def test_current_manual_projection_contains_no_intelligence_serialization():
+def test_card_projection_uses_completed_score_without_scoring_again():
     source = inspect.getsource(CommandCenterService._opportunity_card)
 
-    assert not any(field in source for field in FORBIDDEN_INTELLIGENCE_FIELDS)
-    assert "OpportunityScore" not in source
-    assert "OpportunityRankingEntry" not in source
+    assert "serialize_command_center_intelligence(score)" in source
+    assert ".score(" not in source
+    assert ".as_dict(" not in source
 
 
 def test_old_response_fixture_remains_valid_and_top_level_extras_are_ignored():
     old_response = _response([_card()])
     validated = ActorCommandCenterRead.model_validate(old_response)
-    assert validated.model_dump(mode="json") == old_response
+    serialized = validated.model_dump(mode="json")
+    assert serialized["today_opportunities"][0].pop("intelligence") is None
+    assert serialized == old_response
 
     with_unknown_top_level = {**old_response, "intelligence_version": 1}
     assert (
-        ActorCommandCenterRead.model_validate(with_unknown_top_level).model_dump(mode="json")
-        == old_response
+        ActorCommandCenterRead.model_validate(with_unknown_top_level).model_dump(mode="json")[
+            "today_opportunities"
+        ][0]["intelligence"]
+        is None
     )
 
 
 def test_nested_card_dictionary_can_accept_a_future_additive_projection():
-    proposed = _response([_with_intelligence(_card(), {"version": 1, "overall_score": 50})])
+    summary = serialize_command_center_intelligence(
+        build_opportunity_score(opportunity_id=_card()["id"])
+    )
+    proposed = _response([_with_intelligence(_card(), summary)])
 
     validated = ActorCommandCenterRead.model_validate(proposed).model_dump(mode="json")
 
-    assert validated["today_opportunities"][0]["intelligence"] == {
-        "version": 1,
-        "overall_score": 50,
-    }
+    assert validated["today_opportunities"][0]["intelligence"] == summary
 
 
 def test_deterministic_payload_measurements_are_bounded_characterization():
@@ -375,3 +386,73 @@ def test_dynamic_private_explanations_are_redacted_from_summary_proposal():
     for contributor in contributors:
         if contributor["id"] in REDACTED_EXPLANATION_FACTOR_IDS:
             assert "explanation" not in contributor
+
+
+def test_production_serializer_is_allowlisted_bounded_and_privacy_safe():
+    score = _maximum_factor_score()
+    before = score.as_dict()
+    summary = serialize_command_center_intelligence(score)
+    serialized = json.dumps(summary, sort_keys=True)
+
+    assert set(summary) == {
+        "version",
+        "overall_score",
+        "action",
+        "action_label",
+        "action_reason_code",
+        "confidence",
+        "hard_override",
+        "hard_override_reason",
+        "top_positive_contributors",
+        "top_negative_contributors",
+    }
+    assert len(summary["top_positive_contributors"]) <= 3
+    assert len(summary["top_negative_contributors"]) <= 3
+    assert _size(summary) == 558
+    assert _size([summary] * 8) == 4473
+    assert _size(summary) <= COMMAND_CENTER_INTELLIGENCE_MAX_BYTES
+    assert score.as_dict() == before
+    for sentinel in (
+        "Fictional TV Goal",
+        "Fictional Procedural",
+        "fictional-watch",
+        "fictional-feedback",
+        "category",
+        '"priority":',
+        "scoring_context",
+        "as_of",
+    ):
+        assert sentinel not in serialized
+
+
+@pytest.mark.parametrize("action", list(SuggestedAction))
+def test_production_serializer_exposes_all_action_values_and_labels(action):
+    base = build_opportunity_score(opportunity_id=_card()["id"])
+    score = replace(
+        base,
+        suggested_action=SuggestedActionResult(
+            action=action,
+            reason_code="characterized_action",
+            explanation="Internal action prose is not public.",
+        ),
+    )
+
+    summary = serialize_command_center_intelligence(score)
+
+    assert summary["action"] == action.value
+    assert summary["action_label"] == ACTION_LABELS[action]
+    assert "Internal action prose" not in json.dumps(summary)
+
+
+@pytest.mark.parametrize("level", ["High", "Medium", "Low", "Not Scored"])
+def test_production_serializer_uses_generic_confidence_summaries(level):
+    base = build_opportunity_score(opportunity_id=_card()["id"])
+    score = replace(
+        base,
+        confidence=ScoreConfidence(level=level, summary="PRIVATE TRUST SENTINEL"),
+    )
+
+    summary = serialize_command_center_intelligence(score)
+
+    assert summary["confidence"]["level"] == level
+    assert "PRIVATE TRUST SENTINEL" not in json.dumps(summary)
