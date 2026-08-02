@@ -118,7 +118,7 @@ def result(*items: NormalizedOpportunity) -> PublicWebSearchResult:
             "Rejected because no parsed role overlaps the actor profile.",
             True,
             {
-                "created": 1,
+                "created": 0,
                 "visible": 0,
                 "hidden": 0,
                 "travel_exceptions": 0,
@@ -155,7 +155,8 @@ def test_current_public_web_routing_matrix(
     expected_outcome,
     expected_reason_code,
 ):
-    service = DiscoveryAutomationService(db=None)
+    deleted = []
+    service = DiscoveryAutomationService(db=SimpleNamespace(delete=deleted.append))
     opportunity = SimpleNamespace(
         visibility_status=visibility,
         hidden_by_rule=hidden_by_rule,
@@ -178,6 +179,9 @@ def test_current_public_web_routing_matrix(
     )
     assert summary["sources_suggested_for_approval"] == (
         1 if visibility == "visible" and was_created else 0
+    )
+    assert deleted == (
+        [opportunity] if expected_outcome == "reject_discarded" and was_created else []
     )
 
 

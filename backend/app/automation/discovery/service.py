@@ -95,6 +95,7 @@ class DiscoveryAutomationService:
         self.db = db
         self.registry = DiscoveryPluginRegistry()
         self.public_decision_policy = PublicDiscoveryDecisionPolicy()
+        self.public_web_search_factory = PublicWebBreakdownSearch
 
     def list_plugins(self) -> list[dict]:
         self._sync_plugins()
@@ -509,7 +510,7 @@ class DiscoveryAutomationService:
         specific_archetype: str | None,
     ) -> dict:
         actor = self.db.scalars(select(ActorProfile).limit(1)).first()
-        search = PublicWebBreakdownSearch(actor)
+        search = self.public_web_search_factory(actor)
         base_summary = {
             "provider": "parallel",
             "configured": search.configured(),
@@ -527,20 +528,85 @@ class DiscoveryAutomationService:
         if remaining_visible == 0:
             base_summary["reason"] = "Visible breakdown limit was reached before public web search."
             return {"summary": base_summary, "result": None}
-        try:
+        if not search.configured():
             search_result = search.search(discovery_mode)
-        except Exception as exc:
-            base_summary["configured"] = search.configured()
-            base_summary["reason"] = str(exc)
-            return {"summary": base_summary, "result": None}
-        summary, result = self._process_public_web_search_result(
-            search_result,
-            discovery_mode,
-            remaining_visible,
-            search_modes,
-            specific_archetype,
+            summary, result = self._process_public_web_search_result(
+                search_result,
+                discovery_mode,
+                remaining_visible,
+                search_modes,
+                specific_archetype,
+            )
+            return {"summary": summary, "result": result}
+
+        run_id = uuid4()
+        started_at = datetime.utcnow()
+        run_payload = {
+            "source": "Parallel Public Web Search",
+            "provider_key": "parallel",
+            "discovery_mode": discovery_mode,
+            "search_modes": search_modes,
+            "specific_archetype": specific_archetype,
+        }
+        run = DiscoveryRun(
+            id=run_id,
+            source_plugin_id=None,
+            discovery_mode=discovery_mode,
+            status="running",
+            started_at=started_at,
+            run_payload=run_payload,
         )
-        return {"summary": summary, "result": result}
+        try:
+            self.db.add(run)
+            self.db.flush()
+            search_result = search.search(discovery_mode)
+            summary, result = self._process_public_web_search_result(
+                search_result,
+                discovery_mode,
+                remaining_visible,
+                search_modes,
+                specific_archetype,
+            )
+            routing = result or self._empty_result("Parallel Public Web Search")
+            run.status = "succeeded"
+            run.opportunities_found = search_result.candidate_pages_found
+            run.opportunities_created = routing["created"]
+            run.opportunities_hidden = routing["hidden"]
+            run.total_found = search_result.candidate_pages_found
+            run.total_saved = routing["created"]
+            run.total_rejected = routing["rejected"]
+            run.notes = self._mode_notes(discovery_mode, routing["rejected"])
+            run.finished_at = datetime.utcnow()
+            run.completed_at = run.finished_at
+            self.db.commit()
+            return {"summary": summary, "result": result}
+        except Exception as exc:
+            self.db.rollback()
+            completed_at = datetime.utcnow()
+            failed_run = DiscoveryRun(
+                id=run_id,
+                source_plugin_id=None,
+                discovery_mode=discovery_mode,
+                status="failed",
+                opportunities_found=0,
+                opportunities_created=0,
+                opportunities_hidden=0,
+                total_found=0,
+                total_saved=0,
+                total_rejected=0,
+                error_message=str(exc),
+                run_payload=run_payload,
+                started_at=started_at,
+                finished_at=completed_at,
+                completed_at=completed_at,
+            )
+            try:
+                self.db.add(failed_run)
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                logger.exception("Failed to persist failed public-web DiscoveryRun %s", run_id)
+            raise
 
     def _process_public_web_search_result(
         self,
@@ -638,8 +704,6 @@ class DiscoveryAutomationService:
             parse_confidence = (opportunity.source_metadata or {}).get("breakdown_parse_confidence")
             if candidate_report is not None and isinstance(parse_confidence, (int, float)):
                 candidate_report["parser_confidence"] = parse_confidence
-            if was_created:
-                created += 1
             decision = self.public_decision_policy.decide(item, opportunity)
             if not was_created:
                 decision = self.public_decision_policy.reject(
@@ -658,6 +722,7 @@ class DiscoveryAutomationService:
                 opportunity.hidden_reason = decision.explanation
                 opportunity.rejection_reason = decision.explanation
                 opportunity.manual_review_required = False
+                self.db.delete(opportunity)
             self._mark_candidate_decision(candidate_report, decision)
 
             if not was_created:
@@ -672,6 +737,7 @@ class DiscoveryAutomationService:
                     hidden += 1
                 rejection_summary["duplicate"] += 1
             elif decision.outcome is PublicDiscoveryOutcome.ACCEPT_VISIBLE:
+                created += 1
                 visible += 1
                 if was_created:
                     eligible_added += 1
@@ -681,9 +747,11 @@ class DiscoveryAutomationService:
                 decision.outcome is PublicDiscoveryOutcome.REVIEW_HIDDEN
                 and opportunity.visibility_status == "travel_exception"
             ):
+                created += 1
                 travel_exceptions += 1
                 rejection_summary["travel_exception"] += 1
             elif decision.outcome is PublicDiscoveryOutcome.REVIEW_HIDDEN:
+                created += 1
                 hidden += 1
                 rejection_summary["hidden"] += 1
                 rejection_summary[decision.reason_code] = (
