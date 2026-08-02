@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.automation.discovery.classification import (
     classify_breakdown_text,
 )
 from app.db.models import ActorProfile, Opportunity
+from app.services.breakdown_deadline_service import BreakdownDeadlineService
 
 
 PROTECTED_PLATFORMS = {"actors access", "casting networks", "casting frontier"}
@@ -114,14 +115,8 @@ class TrustVerificationService:
 
     def _date_checks(self, opportunity: Opportunity) -> list[dict]:
         checks = []
-        labels = {
-            "submission_due_date": opportunity.submission_deadline,
-            "audition_date": opportunity.audition_deadline,
-            "callback_date": opportunity.callback_date,
-            "shoot_start_date": opportunity.shoot_start_date,
-            "shoot_end_date": opportunity.shoot_end_date,
-        }
-        populated = {key: self._date_value(value) for key, value in labels.items() if value}
+        validation = BreakdownDeadlineService().validate_opportunity(opportunity)
+        populated = validation.parsed_dates
         if not populated:
             checks.append(self._warn("Date Verification", "No submission, audition, callback, or work dates were found."))
             return checks
@@ -213,11 +208,6 @@ class TrustVerificationService:
         if opportunity.breakdown_parse_runs:
             return float(opportunity.breakdown_parse_runs[0].overall_confidence)
         return None
-
-    def _date_value(self, value: datetime | date) -> str:
-        if isinstance(value, datetime):
-            return value.date().isoformat()
-        return value.isoformat()
 
     def _pass(self, name: str, reason: str) -> dict:
         return {"name": name, "status": "pass", "reason": reason}
