@@ -129,8 +129,39 @@ Intentional execution flushes occur once per newly created Submission so its UUI
 relationships are available to derived writers. No lower layer commits. Scoped reset
 resolves child ownership before deleting Calendar rows, audition journals, actor journals,
 histories, and finally Submission roots. Submission status is now structurally available
-to command-center scoring for the three linked Opportunities. RecommendationFeedback and
-the previously unsupported strategic goal-match context remain neutral.
+to command-center scoring for the three linked Opportunities. The unsupported strategic
+goal-match context remains neutral.
+
+## Recommendation and feedback context
+
+The manifest owns one `AgentRecommendation` root (`04bba855-e70b-5a4e-8133-b07fe2c23220`)
+for the strong self-tape Opportunity and one linked `RecommendationFeedback` root
+(`8f0f687d-e781-564d-b0ed-3c9528f4fcaa`). Ownership requires each reserved UUID, the
+fictional ActorProfile, the expected portfolio-owned Opportunity, and—for feedback—the
+expected recommendation relationship. Same-label or same-score ordinary records are not
+ownership evidence.
+
+Recommendation-owned fields are its actor and Opportunity links plus the bounded
+presentation contract: agent version, Strategy Agent score and breakdown, match/display
+decision, audition/travel/archetype/asset/submission explanations, confidence/risk fields,
+and recommended note. Asset links and audition travel estimates are outside the update
+allowlist; they begin null but later workflow values are preserved. Feedback-owned fields are
+its actor, Opportunity, and recommendation links, `This Fits Me`, three bounded fictional
+fit reasons, and null notes. No private feedback prose is persisted.
+
+Feedback `created_at` is derived from the manifest's one aware `as_of` at first creation.
+Ordinary reruns compare and update only non-temporal owned fields, preserving persisted
+chronology; reset/reseed may recreate it from a new `as_of`. The seed persists these roots
+through a non-committing bounded service: it does not invoke Strategy Agent, Learning
+Agent, or create LearningInsight rows. Feedback is deleted before its recommendation
+during scoped reset.
+
+The linked `This Fits Me` feedback activates the existing +6 Actor Interest factor for the
+strong self-tape Opportunity. Opportunities without feedback demonstrate the neutral
+feedback context. Negative Actor Interest remains deferred because the approved bounded
+manifest contains no negative feedback root. `AgentRecommendation.score` remains Strategy
+Agent presentation data and is neither copied into nor read as the deterministic
+Opportunity Intelligence score.
 
 ## Sanitized-content rules
 

@@ -149,8 +149,9 @@ def test_opportunity_seed_is_durable_stable_idempotent_and_resettable(db) -> Non
         assert fresh.scalar(select(func.count()).select_from(Submission)) == 3
         assert fresh.scalar(select(func.count()).select_from(AuditionCalendarEvent)) == 10
         assert fresh.scalar(select(func.count()).select_from(AuditionJournalEntry)) == 3
-        for model in (AgentRecommendation, RecommendationFeedback, Asset):
-            assert fresh.scalar(select(func.count()).select_from(model)) == 0
+        assert fresh.scalar(select(func.count()).select_from(AgentRecommendation)) == 1
+        assert fresh.scalar(select(func.count()).select_from(RecommendationFeedback)) == 1
+        assert fresh.scalar(select(func.count()).select_from(Asset)) == 0
         assert fresh.scalar(select(func.count()).select_from(CastingGoal)) == 1
         assert fresh.scalar(select(func.count()).select_from(WatchList)) == 1
         assert fresh.scalar(select(func.count()).select_from(CareerMemory)) == 1

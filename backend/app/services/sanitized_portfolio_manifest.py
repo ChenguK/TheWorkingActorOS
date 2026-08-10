@@ -113,8 +113,23 @@ class SubmissionManifest:
 class AgentRecommendationManifest:
     id: UUID
     opportunity_id: UUID
+    agent_version: str
     match_type: str
     score: int
+    display_opportunity: bool
+    explanation: str
+    score_breakdown: dict[str, int]
+    audition_type: str
+    audition_decision: str
+    audition_explanation: str
+    travel_explanation: str
+    archetype_explanation: str
+    asset_explanation: str
+    submission_strategy_explanation: str
+    confidence_level: str
+    risk_level: str
+    risk_explanation: str
+    recommended_note: str
 
 
 @dataclass(frozen=True)
@@ -124,6 +139,7 @@ class RecommendationFeedbackManifest:
     opportunity_id: UUID
     feedback_type: str
     fit_reasons: tuple[str, ...]
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -202,8 +218,29 @@ def build_sanitized_portfolio_manifest(as_of: datetime) -> SanitizedPortfolioMan
         recommendation=AgentRecommendationManifest(
             id=AGENT_RECOMMENDATION_ID,
             opportunity_id=opportunities[0].id,
+            agent_version="portfolio-strategy-v1",
             match_type="Strong Match",
             score=91,
+            display_opportunity=True,
+            explanation="A strong fictional fit with practical self-tape access and aligned career direction.",
+            score_breakdown={
+                "role_fit": 38,
+                "production_travel": 18,
+                "audition_feasibility": 20,
+                "asset_package": 0,
+                "learning_signal": 15,
+            },
+            audition_type=opportunities[0].audition_type,
+            audition_decision="Recommended",
+            audition_explanation="The self-tape format supports a practical submission workflow.",
+            travel_explanation="No audition travel is required for the self-tape.",
+            archetype_explanation="The role aligns with the fictional actor's grounded authority range.",
+            asset_explanation="Select appropriate materials after reviewing the casting notice.",
+            submission_strategy_explanation="Prioritize a focused, role-specific self-tape submission.",
+            confidence_level="High",
+            risk_level="Low",
+            risk_explanation="The fictional notice has strong fit and practical submission conditions.",
+            recommended_note="Review the notice and prepare a focused self-tape package.",
         ),
         feedback=RecommendationFeedbackManifest(
             id=RECOMMENDATION_FEEDBACK_ID,
@@ -211,6 +248,7 @@ def build_sanitized_portfolio_manifest(as_of: datetime) -> SanitizedPortfolioMan
             opportunity_id=opportunities[0].id,
             feedback_type="This Fits Me",
             fit_reasons=("Strong role fit", "Practical self-tape", "Career-aligned project"),
+            created_at=normalized - timedelta(hours=6),
         ),
         derived_records=(
             DerivedRecordPlan("WatchList", 1, "CastingGoal via WorkflowConnectorService"),
@@ -285,7 +323,10 @@ def serialize_manifest(manifest: SanitizedPortfolioManifest) -> str:
             for item in manifest.submissions
         ],
         "recommendation": _record(manifest.recommendation),
-        "feedback": _record(manifest.feedback),
+        "feedback": {
+            **_record(manifest.feedback),
+            "created_at": manifest.feedback.created_at.isoformat(),
+        },
         "derived_records": [_record(item) for item in manifest.derived_records],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)

@@ -122,12 +122,9 @@ def test_career_targeting_is_durable_idempotent_isolated_and_scoped_reset(db) ->
         assert fresh.scalar(select(func.count()).select_from(Submission)) == 3
         assert fresh.scalar(select(func.count()).select_from(AuditionCalendarEvent)) == 10
         assert fresh.scalar(select(func.count()).select_from(AuditionJournalEntry)) == 3
-        for model in (
-            AgentRecommendation,
-            RecommendationFeedback,
-            Asset,
-            LearningInsight,
-        ):
+        assert fresh.scalar(select(func.count()).select_from(AgentRecommendation)) == 1
+        assert fresh.scalar(select(func.count()).select_from(RecommendationFeedback)) == 1
+        for model in (Asset, LearningInsight):
             assert fresh.scalar(select(func.count()).select_from(model)) == 0
 
         manifest = build_sanitized_portfolio_manifest(AS_OF)

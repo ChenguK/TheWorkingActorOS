@@ -88,8 +88,8 @@ def test_submission_workflow_is_durable_idempotent_stable_and_resettable(db) -> 
         assert {
             item_id: fresh.get(Submission, item_id).submitted_at for item_id in SUBMISSION_IDS
         } == submitted_at
-        assert fresh.scalar(select(func.count()).select_from(AgentRecommendation)) == 0
-        assert fresh.scalar(select(func.count()).select_from(RecommendationFeedback)) == 0
+        assert fresh.scalar(select(func.count()).select_from(AgentRecommendation)) == 1
+        assert fresh.scalar(select(func.count()).select_from(RecommendationFeedback)) == 1
         assert fresh.scalar(select(func.count()).select_from(Asset)) == 0
         assert fresh.scalar(select(func.count()).select_from(CallbackEvent)) == 0
 
