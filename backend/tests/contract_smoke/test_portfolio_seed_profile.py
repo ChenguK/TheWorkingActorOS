@@ -80,7 +80,7 @@ def test_profile_seed_is_durable_idempotent_and_reset_is_scoped(db, capsys) -> N
         for key, value in PORTFOLIO_TRAVEL_PREFERENCE_FIELDS.items():
             assert getattr(travel, key) == value
         assert travel.actor_profile_id == PORTFOLIO_PROFILE_ID
-        assert fresh.scalar(select(func.count()).select_from(Opportunity)) == 0
+        assert fresh.scalar(select(func.count()).select_from(Opportunity)) == 7
         assert fresh.scalar(select(func.count()).select_from(Submission)) == 0
         assert fresh.scalar(select(func.count()).select_from(AuditionCalendarEvent)) == 0
         assert fresh.scalar(select(func.count()).select_from(Asset)) == 0

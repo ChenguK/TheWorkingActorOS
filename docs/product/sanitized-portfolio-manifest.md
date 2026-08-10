@@ -64,6 +64,26 @@ The builder accepts exactly one aware `as_of`, converts it to UTC, and derives a
 
 Naive datetimes are rejected. Equivalent timezone representations of the same instant serialize identically.
 
+Persisted temporal fields are stable across ordinary seed reruns. A new `as_of` affects existing
+portfolio records only after an explicit reset/reseed. Ordinary updates compare and modify only the
+non-temporal manifest-owned allowlist; they preserve submission and audition deadlines, callback date,
+and shoot start/end dates. `--reset --execute` followed by a normal `--execute` deliberately recreates
+those timestamps from the new run's single timezone-aware `as_of`.
+
+## Opportunity persistence boundary
+
+The seed owns only: source type, role, project, description, project/role type, union, location,
+audition type, open status, acting classification, initial visibility/review state, confidence,
+source reliability, exact ownership metadata, bounded role/production details, and the five temporal
+fields listed above. Ordinary updates do not overwrite enrichment scores, priority, risk and quality
+explanations, demographic enrichment, watch-list matches, workflow relationships, or other derived state.
+
+Direct ORM construction is intentional for this bounded seed: the immutable manifest supplies all
+required model invariants, while normal Opportunity workflows may enrich records or own commits. The
+seed script remains the sole transaction owner and commits the seven records together. Reset fails closed
+when Submission, Calendar, journal, recommendation, feedback, or callback dependencies exist; the later
+full dependency-aware reset must remove those records first.
+
 ## Sanitized-content rules
 
 - All names, projects, roles, locations, identity values, and narrative text are fictional.
