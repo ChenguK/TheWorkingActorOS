@@ -84,6 +84,29 @@ seed script remains the sole transaction owner and commits the seven records tog
 when Submission, Calendar, journal, recommendation, feedback, or callback dependencies exist; the later
 full dependency-aware reset must remove those records first.
 
+## Career-targeting persistence boundary
+
+The seed persists CastingGoal `6926a996-8c5c-52d4-9687-fcd697aa0db2` with the
+manifest title, `TV` goal type, target archetypes, role types, project types, markets,
+High priority, and Active status. `WorkflowConnectorService.after_casting_goal_saved`
+derives its actor-owned WatchList; the seed does not assign the WatchList UUID or invent
+independent matching fields. Existing global refresh then applies normal match fields to
+non-demo Opportunities.
+
+CareerMemory `d7ac3ea7-3ebe-5529-b22b-5eafdb4d9a6e` owns only current focus,
+career goals, stretch archetypes, preferred project types, preferred markets, and the
+fictional actor relationship. Career/executive notes and unavailable dates remain outside
+the seed allowlist. A non-committing CareerMemory primitive allows the seed script to own
+the single commit while existing public methods retain their previous commit behavior.
+
+Scoped career-targeting reset deletes the derived actor-owned WatchList, CastingGoal, and
+CareerMemory in that order. The fictional profile, travel preferences, and seven
+Opportunities remain. Active WatchList context is now available to the command-center
+scoring assembler; it does not currently assemble `career_goal_matches`, so strategic-
+stretch goal scoring remains neutral. Submission and recommendation-feedback inputs also
+remain neutral until later tasks. The absent `(actor_profile_id, title)` WatchList unique
+constraint leaves a deferred concurrent-save duplication risk.
+
 ## Sanitized-content rules
 
 - All names, projects, roles, locations, identity values, and narrative text are fictional.

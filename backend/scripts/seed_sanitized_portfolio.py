@@ -23,6 +23,12 @@ from app.services.portfolio_seed_ownership_service import (  # noqa: E402
 from app.services.sanitized_portfolio_opportunity_service import (  # noqa: E402
     SanitizedPortfolioOpportunityService,
 )
+from app.services.sanitized_portfolio_career_targeting_service import (  # noqa: E402
+    SanitizedPortfolioCareerTargetingService,
+)
+from app.services.sanitized_portfolio_manifest import (  # noqa: E402
+    build_sanitized_portfolio_manifest,
+)
 
 
 ALLOWED_SEED_ENVIRONMENTS = frozenset({"development", "portfolio_demo"})
@@ -80,6 +86,9 @@ def print_plan(
     opportunity_create_count: int = 0,
     opportunity_update_count: int = 0,
     opportunity_unchanged_count: int = 0,
+    casting_goal_action: str | None = None,
+    watch_list_action: str | None = None,
+    career_memory_action: str | None = None,
 ) -> None:
     mode = "EXECUTE" if execute else "DRY RUN"
     operation = "RESET" if reset else "SEED"
@@ -97,6 +106,10 @@ def print_plan(
         print(f"  create: {opportunity_create_count}")
         print(f"  update: {opportunity_update_count}")
         print(f"  unchanged: {opportunity_unchanged_count}")
+    if casting_goal_action:
+        print(f"CastingGoal: {casting_goal_action}")
+        print(f"WatchList: {watch_list_action}")
+        print(f"CareerMemory: {career_memory_action}")
     if not execute:
         print("No changes written. Run with --execute to apply this plan.")
 
@@ -117,12 +130,18 @@ def run(
         service = PortfolioSeedOwnershipService(db)
         plan = service.plan(reset=reset)
         opportunity_service = SanitizedPortfolioOpportunityService(db)
+        career_service = SanitizedPortfolioCareerTargetingService(db)
         opportunity_plan = None
+        career_plan = None
         if not reset:
             effective_as_of = as_of or datetime.now(timezone.utc)
             opportunity_plan = opportunity_service.plan(
                 as_of=effective_as_of,
                 allow_planned_profile_create=plan.profile_action == "create",
+            )
+            career_plan = career_service.plan(
+                opportunity_plan.manifest,
+                allow_planned_actor_create=plan.profile_action == "create",
             )
         print_plan(
             execute=execute,
@@ -140,10 +159,17 @@ def run(
             opportunity_create_count=opportunity_plan.create_count if opportunity_plan else 0,
             opportunity_update_count=opportunity_plan.update_count if opportunity_plan else 0,
             opportunity_unchanged_count=opportunity_plan.unchanged_count if opportunity_plan else 0,
+            casting_goal_action=career_plan.casting_goal_action if career_plan else None,
+            watch_list_action=career_plan.watch_list_action if career_plan else None,
+            career_memory_action=career_plan.career_memory_action if career_plan else None,
         )
         if not execute:
             return
         if reset:
+            reset_manifest = build_sanitized_portfolio_manifest(
+                as_of or datetime.now(timezone.utc)
+            )
+            career_service.reset(reset_manifest)
             opportunity_service.reset_owned_opportunities()
             plan = service.plan(reset=True)
             service.apply_reset(plan)
@@ -154,6 +180,12 @@ def run(
             opportunity_service.apply(
                 opportunity_plan,
                 profile_created_in_transaction=plan.profile_action == "create",
+            )
+            if career_plan is None:
+                raise RuntimeError("sanitized portfolio career-targeting plan is unavailable")
+            career_service.apply(
+                career_plan,
+                actor_created_in_transaction=plan.profile_action == "create",
             )
         db.commit()
         print("Sanitized portfolio transaction committed.")

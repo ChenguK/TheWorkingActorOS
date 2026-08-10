@@ -149,14 +149,14 @@ def test_opportunity_seed_is_durable_stable_idempotent_and_resettable(db) -> Non
             Submission,
             AuditionCalendarEvent,
             AuditionJournalEntry,
-            CastingGoal,
-            WatchList,
-            CareerMemory,
             AgentRecommendation,
             RecommendationFeedback,
             Asset,
         ):
             assert fresh.scalar(select(func.count()).select_from(model)) == 0
+        assert fresh.scalar(select(func.count()).select_from(CastingGoal)) == 1
+        assert fresh.scalar(select(func.count()).select_from(WatchList)) == 1
+        assert fresh.scalar(select(func.count()).select_from(CareerMemory)) == 1
 
 
 def test_opportunity_collision_rolls_back_entire_seed(db) -> None:

@@ -47,10 +47,13 @@ class DeadlineBand(str, Enum):
 class CastingGoalManifest:
     id: UUID
     title: str
+    goal_type: str
     target_archetypes: tuple[str, ...]
     target_role_types: tuple[str, ...]
     target_project_types: tuple[str, ...]
     target_markets: tuple[str, ...]
+    priority: str
+    status: str
 
 
 @dataclass(frozen=True)
@@ -178,10 +181,13 @@ def build_sanitized_portfolio_manifest(as_of: datetime) -> SanitizedPortfolioMan
         casting_goal=CastingGoalManifest(
             id=CASTING_GOAL_ID,
             title="Build a Film and Television Guest-Star Track",
+            goal_type="TV",
             target_archetypes=("Grounded Investigator", "Resilient Advocate", "Strategic Leader"),
             target_role_types=("Guest Star", "Recurring", "Supporting"),
             target_project_types=("Television", "Feature Film"),
             target_markets=("Atlanta", "New York", "Southeast"),
+            priority="High",
+            status="Active",
         ),
         career_memory=CareerMemoryManifest(
             id=CAREER_MEMORY_ID,

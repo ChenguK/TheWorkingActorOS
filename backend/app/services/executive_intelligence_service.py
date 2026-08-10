@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,18 +30,30 @@ class ExecutiveIntelligenceService:
         self.db = db
 
     def get_or_create_memory(self, actor: ActorProfile | None) -> CareerMemory:
+        memory, created = self.get_or_create_memory_without_commit(actor)
+        if created:
+            self.db.commit()
+            self.db.refresh(memory)
+        return memory
+
+    def get_or_create_memory_without_commit(
+        self, actor: ActorProfile | None, *, memory_id: UUID | None = None
+    ) -> tuple[CareerMemory, bool]:
         actor_id = actor.id if actor else None
         query = select(CareerMemory)
+        if memory_id:
+            query = query.where(CareerMemory.id == memory_id)
         if actor_id:
             query = query.where(CareerMemory.actor_profile_id == actor_id)
         memory = self.db.scalars(query.order_by(CareerMemory.updated_at.desc()).limit(1)).first()
         if memory:
-            return memory
-        memory = CareerMemory(actor_profile_id=actor_id)
+            return memory, False
+        values = {"actor_profile_id": actor_id}
+        if memory_id:
+            values["id"] = memory_id
+        memory = CareerMemory(**values)
         self.db.add(memory)
-        self.db.commit()
-        self.db.refresh(memory)
-        return memory
+        return memory, True
 
     def update_memory(self, actor: ActorProfile | None, payload: CareerMemoryUpdate) -> CareerMemory:
         memory = self.get_or_create_memory(actor)
