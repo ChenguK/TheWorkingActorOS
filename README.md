@@ -28,6 +28,8 @@ GitHub Actions runs the same frontend unit, lint, build, and full Playwright che
 
 Deploy only sanitized demo data with `ENVIRONMENT=portfolio_demo`, one explicit `CORS_ORIGINS` frontend origin, `SUPERVISED_BROWSER_ENABLED=false`, and external web search, AI, routing, scheduling, notifications, public-profile URL imports, and real submission automation disabled. Persistent Materials uploads and deletion remain disabled by default. Enable them with `DURABLE_FILE_STORAGE_ENABLED=true` only after `UPLOAD_DIR` is backed by storage verified to survive instance restarts. Green CI is required but does not replace post-deployment health, route, API, and persistence smoke testing.
 
+The sanitized portfolio seed command is disabled by default. It must target a dedicated sanitized database—never a real-user database—and requires `ENVIRONMENT=development` or `ENVIRONMENT=portfolio_demo` together with the temporary explicit authorization `SANITIZED_PORTFOLIO_SEED_ENABLED=true`. Both dry-run and execute modes fail before opening a database session without that authorization. Run `python scripts/seed_sanitized_portfolio.py` from `backend/` to inspect a plan, add `--execute` to commit it, or use `--reset --execute` for the metadata-scoped reset. Return the authorization variable to `false` after the controlled operation. Never put a real database URL or credential in tracked files.
+
 Built as a portfolio-grade demonstration of multi-agent orchestration, explainable AI decision-making, human-in-the-loop learning, and approval-gated automation.
 
 ## What It Does

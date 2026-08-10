@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     notifications_enabled: bool = False
     public_profile_import_enabled: bool = True
     supervised_browser_enabled: bool = True
+    sanitized_portfolio_seed_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
