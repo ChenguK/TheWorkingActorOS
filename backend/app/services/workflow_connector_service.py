@@ -311,7 +311,12 @@ class WorkflowConnectorService:
         priority: str,
         notes: str,
     ) -> WatchList:
-        existing = self.db.scalars(select(WatchList).where(WatchList.title == title)).first()
+        existing = self.db.scalars(
+            select(WatchList).where(
+                WatchList.title == title,
+                WatchList.actor_profile_id == actor_profile_id,
+            )
+        ).first()
         if existing:
             existing.actor_profile_id = actor_profile_id
             existing.category = category

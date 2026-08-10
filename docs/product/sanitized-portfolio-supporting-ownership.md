@@ -48,7 +48,7 @@ Supporting rows generally do not need their own marker when an existing required
 - **Marker:** unnecessary for actor-owned rows; the model has no metadata field.
 - **Cleanup:** delete actor-owned WatchLists before the actor or rely on database cascade.
 - **Residue/shared risk:** actor-owned rows do not survive actor deletion. Ownerless rows do, and global list/refresh queries include them.
-- **Creation path:** prefer `WatchListService` semantics (`backend/app/services/watch_list_service.py`) because creation refreshes watch-list matches. However, it defaults ownership to the first ActorProfile, queries enabled WatchLists globally, mutates every non-demo Opportunity, and commits internally. The future seed must pass the fictional actor explicitly and avoid using this service against a mixed database.
+- **Creation path:** the CastingGoal connector now scopes derived upserts by both generated title and `actor_profile_id`; another actor's or a null-owner same-title row is not adopted. `WatchListService` refresh still queries enabled WatchLists globally and mutates every non-demo Opportunity, so the future seed must pass the fictional actor explicitly and retain isolated-database safeguards.
 - **Dataset v1:** recommended, preferably created as the deterministic side effect of one CastingGoal rather than duplicated manually.
 
 ### CastingGoal
@@ -59,7 +59,7 @@ Supporting rows generally do not need their own marker when an existing required
 - **Identification/marker:** fictional actor ID is sufficient; no marker is needed. Null-owner goals are out of scope.
 - **Cleanup:** remove any WatchList derived from the goal, then delete the goal or fictional actor. The database deletes actor-owned goals with the actor.
 - **Residue/shared risk:** the goal itself cannot orphan when actor-owned. Its generated WatchList is not FK-linked to the goal and must be found through actor ownership, not title alone.
-- **Creation path:** preserve `create_casting_goal` orchestration (`backend/app/api/v1/routes/agents.py`): it calls `WorkflowConnectorService.after_casting_goal_saved`, refreshes WatchLists against Opportunities, and commits. Direct ORM construction would omit those effects. The internal WatchList upsert currently matches title globally (`WorkflowConnectorService._upsert_watch_list`), so isolation is essential.
+- **Creation path:** preserve `create_casting_goal` orchestration (`backend/app/api/v1/routes/agents.py`): it calls `WorkflowConnectorService.after_casting_goal_saved`, refreshes WatchLists against Opportunities, and commits. Direct ORM construction would omit those effects. The internal WatchList upsert is actor-and-title scoped; null-owner goals retain their legacy null-to-null derivation without being adopted by actor-owned goals.
 - **Dataset v1:** recommended because active goals feed Opportunity Intelligence and can establish a meaningful WatchList.
 
 ### DreamRoleTarget
@@ -242,7 +242,7 @@ Several production services commit internally and some create additional records
 
 1. Parent-first deletion permanently loses ownership evidence for Calendar and journal rows using `SET NULL`.
 2. Nullable actor ownership on WatchList, CastingGoal, and CareerMemory means null-owner records cannot safely be claimed.
-3. WatchList queries and connector title matching are global; database isolation is mandatory.
+3. WatchList matching/refresh queries remain global, while connector upserts are actor-and-title scoped. Database isolation remains mandatory because refresh applies enabled lists to every non-demo Opportunity.
 4. Service-owned commits conflict with a future all-or-nothing seed transaction unless composition is designed explicitly.
 5. Submission creation has intentional cross-feature side effects; direct ORM construction would underrepresent the application.
 6. Asset database cascades do not remove files, and fake file paths would create broken portfolio behavior.
