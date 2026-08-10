@@ -9,9 +9,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from app.db.models import Opportunity
+from app.db.models import ActorProfile, Opportunity, TravelPreference
 from app.services.portfolio_seed_ownership_service import (
+    PORTFOLIO_PROFILE_FIELDS,
+    PORTFOLIO_PROFILE_ID,
     PORTFOLIO_SEED_NAMESPACE,
+    PORTFOLIO_TRAVEL_PREFERENCE_FIELDS,
+    PORTFOLIO_TRAVEL_PREFERENCE_ID,
     PortfolioSeedOwnershipService,
 )
 from scripts import cleanup_source_and_demo_data, seed_sanitized_portfolio
@@ -61,6 +65,12 @@ def scalar_result(*items: Opportunity) -> MagicMock:
     return result
 
 
+def empty_seed_db() -> MagicMock:
+    db = MagicMock()
+    db.get.return_value = None
+    return db
+
+
 def test_portfolio_metadata_survives_json_serialization_and_preserves_normal_status() -> None:
     opportunity = build_opportunity(opportunity_id=OWNED_ID, owned=True)
 
@@ -86,7 +96,7 @@ def test_demo_flag_alone_never_establishes_portfolio_ownership() -> None:
 
 def test_dry_run_performs_zero_writes() -> None:
     owned = build_opportunity(opportunity_id=OWNED_ID, owned=True)
-    db = MagicMock()
+    db = empty_seed_db()
     db.scalars.return_value = scalar_result(owned)
     seed_sanitized_portfolio.run(
         execute=False,
@@ -105,7 +115,7 @@ def test_dry_run_performs_zero_writes() -> None:
 def test_reset_only_deletes_records_that_still_have_exact_ownership() -> None:
     owned = build_opportunity(opportunity_id=OWNED_ID, owned=True)
     user = build_opportunity(opportunity_id=USER_ID, owned=False)
-    db = MagicMock()
+    db = empty_seed_db()
     db.scalars.side_effect = [scalar_result(owned), scalar_result(owned, user)]
     service = PortfolioSeedOwnershipService(db)
 
@@ -118,13 +128,13 @@ def test_reset_only_deletes_records_that_still_have_exact_ownership() -> None:
 
 def test_repeated_reset_runs_are_idempotent() -> None:
     owned = build_opportunity(opportunity_id=OWNED_ID, owned=True)
-    first_db = MagicMock()
+    first_db = empty_seed_db()
     first_db.scalars.side_effect = [scalar_result(owned), scalar_result(owned)]
     first_service = PortfolioSeedOwnershipService(first_db)
     first_plan = first_service.plan(reset=True)
     first_service.apply_reset(first_plan)
 
-    second_db = MagicMock()
+    second_db = empty_seed_db()
     second_db.scalars.return_value = scalar_result()
     second_service = PortfolioSeedOwnershipService(second_db)
     second_plan = second_service.plan(reset=True)
@@ -143,7 +153,7 @@ def test_correctly_named_portfolio_record_avoids_legacy_demo_cleanup() -> None:
 
 
 def test_script_rolls_back_failed_execute() -> None:
-    db = MagicMock()
+    db = empty_seed_db()
     db.scalars.side_effect = RuntimeError("planned database failure")
     try:
         seed_sanitized_portfolio.run(
@@ -163,7 +173,7 @@ def test_script_rolls_back_failed_execute() -> None:
 
 
 def test_execute_commits_exactly_once() -> None:
-    db = MagicMock()
+    db = empty_seed_db()
     db.scalars.return_value = scalar_result()
     seed_sanitized_portfolio.run(
         execute=True,
@@ -196,7 +206,7 @@ def test_default_configuration_fails_closed_before_session_creation() -> None:
 
 @pytest.mark.parametrize("environment", ["development", "portfolio_demo"])
 def test_explicit_authorization_permits_approved_dry_run(environment: str) -> None:
-    db = MagicMock()
+    db = empty_seed_db()
     db.scalars.return_value = scalar_result()
 
     seed_sanitized_portfolio.run(
@@ -288,3 +298,99 @@ def test_cli_safety_error_does_not_reveal_database_secret(monkeypatch, capsys) -
     assert SECRET_DATABASE_URL not in output
     assert "private-password" not in output
     assert "secret.invalid" not in output
+
+
+def test_profile_plan_reports_create_update_and_unchanged() -> None:
+    create_db = empty_seed_db()
+    create_db.scalars.return_value = scalar_result()
+    create_plan = PortfolioSeedOwnershipService(create_db).plan()
+
+    profile = ActorProfile(id=PORTFOLIO_PROFILE_ID, **PORTFOLIO_PROFILE_FIELDS)
+    travel = TravelPreference(
+        id=PORTFOLIO_TRAVEL_PREFERENCE_ID,
+        actor_profile_id=PORTFOLIO_PROFILE_ID,
+        **PORTFOLIO_TRAVEL_PREFERENCE_FIELDS,
+    )
+    unchanged_db = empty_seed_db()
+    unchanged_db.scalars.return_value = scalar_result()
+    unchanged_db.get.side_effect = [profile, travel]
+    unchanged_plan = PortfolioSeedOwnershipService(unchanged_db).plan()
+
+    profile.current_location = "A changed location"
+    update_db = empty_seed_db()
+    update_db.scalars.return_value = scalar_result()
+    update_db.get.side_effect = [profile, travel]
+    update_plan = PortfolioSeedOwnershipService(update_db).plan()
+
+    assert (create_plan.profile_action, create_plan.travel_preference_action) == (
+        "create",
+        "create",
+    )
+    assert (unchanged_plan.profile_action, unchanged_plan.travel_preference_action) == (
+        "unchanged",
+        "unchanged",
+    )
+    assert update_plan.profile_action == "update"
+
+
+def test_apply_creates_only_profile_and_travel_configuration() -> None:
+    db = empty_seed_db()
+    db.scalars.return_value = scalar_result()
+    service = PortfolioSeedOwnershipService(db)
+    plan = service.plan()
+
+    service.apply(plan)
+
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert len(added) == 2
+    assert isinstance(added[0], ActorProfile)
+    assert isinstance(added[1], TravelPreference)
+    assert added[0].id == PORTFOLIO_PROFILE_ID
+    assert added[1].actor_profile_id == PORTFOLIO_PROFILE_ID
+    assert not any(isinstance(record, Opportunity) for record in added)
+
+
+def test_fictional_profile_definition_contains_no_private_sentinels() -> None:
+    serialized = json.dumps(
+        {
+            "profile": PORTFOLIO_PROFILE_FIELDS,
+            "travel": PORTFOLIO_TRAVEL_PREFERENCE_FIELDS,
+        }
+    ).lower()
+
+    for sentinel in (
+        "private-user",
+        "private-password",
+        "real actor",
+        "example.com",
+        "@",
+    ):
+        assert sentinel not in serialized
+
+
+def test_reserved_profile_identity_collision_fails_closed() -> None:
+    ordinary = ActorProfile(
+        id=PORTFOLIO_PROFILE_ID,
+        **{**PORTFOLIO_PROFILE_FIELDS, "name": "Unrelated Existing Actor"},
+    )
+    db = empty_seed_db()
+    db.scalars.return_value = scalar_result()
+    db.get.return_value = ordinary
+
+    with pytest.raises(ValueError, match="profile identity is already in use"):
+        PortfolioSeedOwnershipService(db).plan()
+
+
+@pytest.mark.parametrize("action", ["create", "update", "unchanged"])
+def test_dry_run_output_reports_profile_action(action: str, capsys) -> None:
+    seed_sanitized_portfolio.print_plan(
+        execute=False,
+        reset=False,
+        profile_action=action,
+        travel_preference_action="unchanged",
+        create_count=action == "create",
+        update_count=action == "update",
+        remove_count=0,
+    )
+
+    assert f"ActorProfile: {action}" in capsys.readouterr().out

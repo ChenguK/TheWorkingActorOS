@@ -64,12 +64,21 @@ def database_session_factory() -> SessionFactory:
 
 
 def print_plan(
-    *, execute: bool, reset: bool, create_count: int, update_count: int, remove_count: int
+    *,
+    execute: bool,
+    reset: bool,
+    profile_action: str,
+    travel_preference_action: str,
+    create_count: int,
+    update_count: int,
+    remove_count: int,
 ) -> None:
     mode = "EXECUTE" if execute else "DRY RUN"
     operation = "RESET" if reset else "SEED"
     print(f"Sanitized portfolio {operation} {mode}")
     print(f"Ownership namespace: {PORTFOLIO_SEED_NAMESPACE}")
+    print(f"ActorProfile: {profile_action}")
+    print(f"TravelPreference: {travel_preference_action}")
     print(f"Records to create: {create_count}")
     print(f"Records to update: {update_count}")
     print(f"Opportunities to remove: {remove_count}")
@@ -94,6 +103,8 @@ def run(
         print_plan(
             execute=execute,
             reset=reset,
+            profile_action=plan.profile_action,
+            travel_preference_action=plan.travel_preference_action,
             create_count=plan.create_count,
             update_count=plan.update_count,
             remove_count=plan.remove_count,
@@ -102,6 +113,8 @@ def run(
             return
         if reset:
             service.apply_reset(plan)
+        else:
+            service.apply(plan)
         db.commit()
         print("Sanitized portfolio transaction committed.")
     except Exception:
