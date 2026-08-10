@@ -216,3 +216,69 @@ Derived rows are separately projected as one WatchList, three histories, ten Cal
 ## Cleanup implications
 
 Before deletion, reset must resolve all root and derived ownership IDs. Calendar and both journal types must be deleted before Submission and Opportunity parents because their `SET NULL` links would otherwise erase ownership evidence. Feedback precedes recommendation; Submission associations precede Submission; goal-derived WatchList precedes CastingGoal. Opportunities precede the fictional ActorProfile only after their protected Submission history has been removed. The dedicated sanitized database and safety gate remain the primary isolation controls.
+
+## Complete v1 verification
+
+Task 9 verifies the composed seed against disposable PostgreSQL through the real seed
+entry point and fresh sessions. The owned graph is exactly one ActorProfile, one
+TravelPreference, seven Opportunities, one CastingGoal, one derived actor-owned
+WatchList, one CareerMemory, three Submissions, three SubmissionStatusHistory rows, ten
+AuditionCalendarEvent rows, three AuditionJournalEntry rows, three ActorJournalEntry
+rows, one AgentRecommendation, and one RecommendationFeedback. No Asset,
+SubmissionAsset, CallbackEvent, DreamRoleTarget, Archetype, or LearningInsight is
+created. Same-`as_of` and later-`as_of` ordinary reruns preserve IDs, counts, and every
+persisted workflow date.
+
+Real FastAPI reads were verified for `/api/v1/actor-profile`, `/api/v1/opportunities`,
+`/api/v1/submissions`, `/api/v1/operations/calendar/events`, `/api/v1/journal`,
+`/api/v1/intelligence/audition-journal`, `/api/v1/agents/recommendations`,
+`/api/v1/agents/career-memory`, `/api/v1/command-center`, and
+`/api/v1/system/capabilities`. The existing Opportunity response contract includes
+`source_metadata`; Task 9 does not add or remove that field. Existing visibility and
+command-center candidate rules expose five of the seven Opportunities in the public
+Opportunity list and Command Center. The Dashboard displays the first three cards.
+
+| Role / project | Score | Suggested action | Confidence | Hard override | In `today_opportunities` |
+| --- | ---: | --- | --- | --- | --- |
+| Forensic Analyst / Signal at Dawn | 86 | Save for Later (`already_tracked`) | Low | No | Yes, rank 1 |
+| Community Organizer / Southbound Stories | 81 | Review Today (`strong_score_review`) | Medium | No | Yes, rank 2 |
+| Crisis Negotiator / Quiet Leverage | 80 | Save for Later (`already_tracked`) | Low | No | Yes, rank 3 |
+| Technology Founder / Second Horizon | 80 | Save for Later (`already_tracked`) | Low | No | Yes, rank 4 |
+| Investigative Producer / Open Frequency | 80 | Review Today (`strong_score_review`) | Low | No | Yes, rank 5 |
+| Federal Investigator / Northern Passage | 75 | Review Today (`strong_score_review`) | Medium | No | No; travel-review state is excluded |
+| Public Defender / Crossing Peachtree | 72 | Review Today (`strong_score_review`) | Low | No | No; hidden state is excluded |
+
+The scoring context includes the ActorProfile, TravelPreference, parsed Opportunity
+facts, WatchList matches, Submission state, and RecommendationFeedback. CareerMemory is
+available to executive intelligence but is not a direct scorer input.
+`career_goal_matches` remains neutral, as do unsupported or absent facts; no semantic
+career-goal match is claimed. The positive feedback contributes through Actor Interest
+only for its linked Opportunity. The seeded Strategy Agent recommendation remains a
+separate score of 91 and no Strategy Agent execution occurs during Command Center reads.
+
+The checked-in strict Dashboard fixture mirrors the real five-card Command Center
+response asserted by the PostgreSQL contract test. It verifies one initial
+`GET /command-center`, no intelligence-specific endpoint, backend ordering, action,
+score, confidence, keyboard-operable contributor disclosure, and the continued presence
+of non-Opportunity sections. The Dashboard renders three cards because its existing
+presentation ceiling is three. Loading, empty, success, null/absent intelligence, and
+error behavior remain covered by component tests. The measured Command Center payload
+is guarded below 100 KB and the strict scenario makes one initial Command Center request.
+
+API payload and rendered-output scans exclude credentials, database URLs, local paths,
+private-user sentinels, private feedback notes, raw provider/page content, `example.com`,
+and vulnerable cleanup-trigger words. The complete reset uses the existing dependency
+order: feedback before recommendation; Calendar and both journal families before
+Submission/Opportunity parents; histories with Submission cleanup; Submissions before
+Opportunities; WatchList before CastingGoal; then CareerMemory, TravelPreference,
+Opportunities, and the fictional ActorProfile last. Fresh-session assertions find zero
+owned v1 rows afterward. Existing scoped-reset contract tests additionally prove
+unrelated ActorProfiles, Opportunities, WatchLists, CastingGoals, CareerMemories,
+recommendations, and feedback survive unchanged; Submission-derived ordinary-record
+isolation continues to rely on relationship ownership rather than labels.
+
+Known v1 limitations are intentional: durable Assets and SubmissionAssets remain
+deferred; there are no CallbackEvents, DreamRoleTargets, new Archetypes, or
+LearningInsights; semantic career-goal scoring and negative recommendation feedback are
+neutral/deferred. The fictional seed is for portfolio presentation and may run only
+against an explicitly authorized dedicated sanitized database.

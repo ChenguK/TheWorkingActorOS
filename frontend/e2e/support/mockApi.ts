@@ -17,6 +17,7 @@ export type MockState = {
   assets: Array<Record<string, unknown>>;
   capabilities: Record<string, unknown>;
   discoveryResult: Record<string, unknown>;
+  commandCenter: Record<string, unknown>;
   focusMode: string;
   failPath?: string;
   delayPath?: string;
@@ -39,6 +40,7 @@ export function createMockState(overrides: Partial<MockState> = {}): MockState {
     assets: [assetFixture()],
     capabilities: capabilitiesFixture(),
     discoveryResult: discoveryResultFixture(),
+    commandCenter: defaultCommandCenterFixture(),
     focusMode: "Audition Mode",
     ...overrides
   };
@@ -342,11 +344,7 @@ async function handle(request: Request, path: string, state: MockState): Promise
     return { body: { id: "focus-1", active_mode: state.focusMode, created_at: now, updated_at: now } };
   }
   if (path === "/dashboard/widgets" && method === "GET") return { body: dashboardWidgets() };
-  if (path === "/command-center" && method === "GET") return { body: { today_opportunities: [
-    { id: "intelligence-1", role: "Detective", project: "Fictional Procedural", intelligence: { version: 1, overall_score: 87, action: "apply_now", action_label: "Apply Now", action_reason_code: "high_priority_actionable", confidence: { level: "High", summary: "This recommendation is supported by strong and complete opportunity information." }, hard_override: false, hard_override_reason: null, top_positive_contributors: [{ id: "match.role_fit.strong", points: 18, explanation: "The strongest parsed role is a strong fit." }], top_negative_contributors: [] } },
-    { id: "legacy-2", role: "Doctor", project: "Legacy Drama" },
-    { id: "future-3", role: "Attorney", project: "Future Contract", intelligence: { version: 2 } }
-  ], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] } };
+  if (path === "/command-center" && method === "GET") return { body: state.commandCenter };
   if (path === "/operations/equipment-profile" && method === "GET") return { body: null };
   if (/^\/travel-preferences\/[^/]+$/.test(path) && method === "GET") return { body: null };
   if (path === "/operations/dashboard" && method === "GET") return { body: null };
@@ -380,6 +378,53 @@ async function handle(request: Request, path: string, state: MockState): Promise
   if (path === "/agents/watch-lists" && method === "GET") return { body: [] };
   if (path === "/agents/career-memory" && method === "GET") return { body: [] };
   throw new Error(`Mock route was recognized but has no response: ${method} ${path}`);
+}
+
+function defaultCommandCenterFixture() {
+  return { today_opportunities: [
+    { id: "intelligence-1", role: "Detective", project: "Fictional Procedural", intelligence: { version: 1, overall_score: 87, action: "apply_now", action_label: "Apply Now", action_reason_code: "high_priority_actionable", confidence: { level: "High", summary: "This recommendation is supported by strong and complete opportunity information." }, hard_override: false, hard_override_reason: null, top_positive_contributors: [{ id: "match.role_fit.strong", points: 18, explanation: "The strongest parsed role is a strong fit." }], top_negative_contributors: [] } },
+    { id: "legacy-2", role: "Doctor", project: "Legacy Drama" },
+    { id: "future-3", role: "Attorney", project: "Future Contract", intelligence: { version: 2 } }
+  ], executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: [] };
+}
+
+const sanitizedIntelligence = (
+  overall_score: number,
+  action: string,
+  action_label: string,
+  action_reason_code: string,
+  confidence: "Low" | "Medium"
+) => ({
+  version: 1,
+  overall_score,
+  action,
+  action_label,
+  action_reason_code,
+  confidence: { level: confidence, summary: confidence === "Medium" ? "This recommendation is supported, but some opportunity information may need review." : "Important opportunity details are missing or uncertain." },
+  hard_override: false,
+  hard_override_reason: null,
+  top_positive_contributors: [
+    { id: "match.demographic.confirmed", points: 8, explanation: null },
+    { id: "practicality.audition.remote", points: 8, explanation: "The audition can be completed remotely." },
+    { id: "interest.watchlist.high", points: 8, explanation: null }
+  ],
+  top_negative_contributors: [
+    { id: "confidence.trust.review", points: -5, explanation: "The opportunity needs additional trust review." },
+    { id: "confidence.parser.missing", points: -4, explanation: "Parsed opportunity details are unavailable." }
+  ]
+});
+
+export function sanitizedPortfolioCommandCenterFixture() {
+  return {
+    today_opportunities: [
+      { id: "9298ef7e-a248-58ca-8195-ef569b61ffdc", role: "Forensic Analyst", project: "Signal at Dawn", intelligence: sanitizedIntelligence(86, "save_for_later", "Save for Later", "already_tracked", "Low") },
+      { id: "312d6afa-f095-5eda-8bc5-5c23e64f290b", role: "Community Organizer", project: "Southbound Stories", intelligence: sanitizedIntelligence(81, "review_today", "Review Today", "strong_score_review", "Medium") },
+      { id: "a77a7780-e97d-52d4-afa7-3c6033fcfec0", role: "Crisis Negotiator", project: "Quiet Leverage", intelligence: sanitizedIntelligence(80, "save_for_later", "Save for Later", "already_tracked", "Low") },
+      { id: "039f8c81-ca9c-5086-a26b-88d591176c1e", role: "Technology Founder", project: "Second Horizon", intelligence: sanitizedIntelligence(80, "save_for_later", "Save for Later", "already_tracked", "Low") },
+      { id: "feb6af35-8416-5466-b77a-316f8c9382a0", role: "Investigative Producer", project: "Open Frequency", intelligence: sanitizedIntelligence(80, "review_today", "Review Today", "strong_score_review", "Low") }
+    ],
+    executive_priorities: [], chief_of_staff_priorities: [], since_last_visit: [], queued_submissions: [], upcoming_deadlines: [], outcome_nudges: [], career_tasks: [], material_gaps: [], asset_performance: [], platform_check_ins: []
+  };
 }
 
 export const opportunityFixture = (id = "opp-1") => ({ id, role: "DST Detective", project: "Spring Forward", description: "Lead investigator", source_type: "Manual Entry", source_status: "Approved", visibility_status: "Visible", platform: "E2E", project_type: "TV", role_type: "Guest Star", category: "Film/TV", union: "SAG-AFTRA", location: "New York, NY", shoot_location: "New York, NY", audition_type: "Self-Tape", audition_deadline: "2026-03-08T01:30:00-05:00", submission_deadline: "2026-03-08T01:30:00-05:00", priority: "High", archetypes: ["Authority"], role_details: {}, source_metadata: {}, production_details: {}, extracted_facts: {}, ai_inference: {}, breakdown_roles: [], breakdown_sections: [], breakdown_parse_runs: [], watchlist_match_names: [], watchlist_match_count: 0, manual_review_required: false, is_duplicate: false, from_agent: false, travel_covered: false, housing_covered: false, created_at: now, updated_at: now });

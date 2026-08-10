@@ -179,6 +179,36 @@ describe("Dashboard feature", () => {
     expect(screen.getByRole("link", { name: /add audition/i })).toHaveAttribute("href", "/auditions");
   });
 
+  it("reports command-center loading while keeping the Dashboard shell available", () => {
+    vi.mocked(useCommandCenter).mockReturnValue({ data: undefined, isLoading: true, isError: false } as never);
+
+    renderWithRouter(<DashboardPanel />);
+
+    expect(screen.getByText("Loading command center...")).toHaveAttribute("role", "status");
+    expect(screen.getByRole("heading", { name: "The Working Actor OS" })).toBeInTheDocument();
+  });
+
+  it("renders the existing empty priority state", async () => {
+    vi.mocked(listDashboardWidgets).mockResolvedValue([
+      widget("todays_priorities", "Today's Priorities", 0)
+    ]);
+
+    renderWithRouter(<DashboardPanel />);
+
+    expect(await screen.findByText("No priority breakdowns today.")).toBeInTheDocument();
+  });
+
+  it("reports a command-center error while keeping other Dashboard sections available", () => {
+    vi.mocked(useCommandCenter).mockReturnValue({ data: undefined, isLoading: false, isError: true } as never);
+
+    renderWithRouter(<DashboardPanel />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Command center could not load. Other Dashboard sections remain usable."
+    );
+    expect(screen.getByRole("link", { name: /add audition/i })).toHaveAttribute("href", "/auditions");
+  });
+
   it("persists widget show/hide changes through the widget hook", async () => {
     const initialWidgets = widgets();
     const { result } = renderHook(() => useDashboardWidgets({ initialWidgets }), { wrapper: createTestQueryWrapper() });
