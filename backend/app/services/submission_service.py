@@ -45,9 +45,14 @@ class SubmissionService:
         return assets
 
     def create(self, payload: SubmissionCreate) -> Submission:
+        submission = self.create_without_commit(payload)
+        self.db.commit()
+        return self.repo.get_full(submission.id)
+
+    def create_without_commit(self, payload: SubmissionCreate, *, submission_id=None) -> Submission:
         if payload.current_status not in SUBMISSION_STATUSES:
             raise ValueError("Invalid submission status")
-        submission = Submission(
+        values = dict(
             actor_profile_id=payload.actor_profile_id,
             opportunity_id=payload.opportunity_id,
             current_status=payload.current_status,
@@ -61,6 +66,9 @@ class SubmissionService:
             other_cost=payload.other_cost,
             total_cost=self._total_cost(payload),
         )
+        if submission_id:
+            values["id"] = submission_id
+        submission = Submission(**values)
         submission.assets = self._load_assets(payload.asset_ids)
         for asset in submission.assets:
             asset.last_used_date = (payload.submitted_at or datetime.utcnow()).date()
@@ -75,8 +83,7 @@ class SubmissionService:
         self.db.flush()
         WorkflowConnectorService(self.db).after_submission_created(submission)
         ActorWorkEventService(self.db).submission_added(submission)
-        self.db.commit()
-        return self.repo.get_full(submission.id)
+        return submission
 
     def update(self, submission_id, payload: SubmissionUpdate) -> Submission:
         submission = self.repo.get_full(submission_id)

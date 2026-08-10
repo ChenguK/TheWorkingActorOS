@@ -29,6 +29,9 @@ from app.services.sanitized_portfolio_career_targeting_service import (  # noqa:
 from app.services.sanitized_portfolio_manifest import (  # noqa: E402
     build_sanitized_portfolio_manifest,
 )
+from app.services.sanitized_portfolio_submission_service import (  # noqa: E402
+    SanitizedPortfolioSubmissionService,
+)
 
 
 ALLOWED_SEED_ENVIRONMENTS = frozenset({"development", "portfolio_demo"})
@@ -89,6 +92,7 @@ def print_plan(
     casting_goal_action: str | None = None,
     watch_list_action: str | None = None,
     career_memory_action: str | None = None,
+    submission_actions: tuple[tuple[str, str], ...] = (),
 ) -> None:
     mode = "EXECUTE" if execute else "DRY RUN"
     operation = "RESET" if reset else "SEED"
@@ -110,6 +114,8 @@ def print_plan(
         print(f"CastingGoal: {casting_goal_action}")
         print(f"WatchList: {watch_list_action}")
         print(f"CareerMemory: {career_memory_action}")
+    for submission_id, action in submission_actions:
+        print(f"Submission {submission_id}: {action}")
     if not execute:
         print("No changes written. Run with --execute to apply this plan.")
 
@@ -131,8 +137,10 @@ def run(
         plan = service.plan(reset=reset)
         opportunity_service = SanitizedPortfolioOpportunityService(db)
         career_service = SanitizedPortfolioCareerTargetingService(db)
+        submission_service = SanitizedPortfolioSubmissionService(db)
         opportunity_plan = None
         career_plan = None
+        submission_plan = None
         if not reset:
             effective_as_of = as_of or datetime.now(timezone.utc)
             opportunity_plan = opportunity_service.plan(
@@ -142,6 +150,11 @@ def run(
             career_plan = career_service.plan(
                 opportunity_plan.manifest,
                 allow_planned_actor_create=plan.profile_action == "create",
+            )
+            submission_plan = submission_service.plan(
+                opportunity_plan.manifest,
+                allow_planned_actor_create=plan.profile_action == "create",
+                allow_planned_opportunity_create=opportunity_plan.create_count > 0,
             )
         print_plan(
             execute=execute,
@@ -162,6 +175,11 @@ def run(
             casting_goal_action=career_plan.casting_goal_action if career_plan else None,
             watch_list_action=career_plan.watch_list_action if career_plan else None,
             career_memory_action=career_plan.career_memory_action if career_plan else None,
+            submission_actions=(
+                tuple((str(item.id), item.action) for item in submission_plan.items)
+                if submission_plan
+                else ()
+            ),
         )
         if not execute:
             return
@@ -169,6 +187,7 @@ def run(
             reset_manifest = build_sanitized_portfolio_manifest(
                 as_of or datetime.now(timezone.utc)
             )
+            submission_service.reset(reset_manifest)
             career_service.reset(reset_manifest)
             opportunity_service.reset_owned_opportunities()
             plan = service.plan(reset=True)
@@ -187,6 +206,9 @@ def run(
                 career_plan,
                 actor_created_in_transaction=plan.profile_action == "create",
             )
+            if submission_plan is None:
+                raise RuntimeError("sanitized portfolio Submission plan is unavailable")
+            submission_service.apply(submission_plan)
         db.commit()
         print("Sanitized portfolio transaction committed.")
     except Exception:

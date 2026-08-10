@@ -119,10 +119,10 @@ def test_career_targeting_is_durable_idempotent_isolated_and_scoped_reset(db) ->
             fresh.scalars(select(Opportunity).where(Opportunity.id != ordinary_opportunity_id))
         )
         assert any(item.watchlist_match_count > 0 for item in portfolio_opportunities)
+        assert fresh.scalar(select(func.count()).select_from(Submission)) == 3
+        assert fresh.scalar(select(func.count()).select_from(AuditionCalendarEvent)) == 10
+        assert fresh.scalar(select(func.count()).select_from(AuditionJournalEntry)) == 3
         for model in (
-            Submission,
-            AuditionCalendarEvent,
-            AuditionJournalEntry,
             AgentRecommendation,
             RecommendationFeedback,
             Asset,

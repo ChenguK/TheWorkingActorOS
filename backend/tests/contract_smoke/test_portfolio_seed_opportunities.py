@@ -98,7 +98,8 @@ def test_opportunity_seed_is_durable_stable_idempotent_and_resettable(db) -> Non
             "visible",
         ]
         assert all(
-            item.source_metadata == {"portfolio_seed": {"namespace": PORTFOLIO_SEED_NAMESPACE}}
+            item.source_metadata.get("portfolio_seed")
+            == {"namespace": PORTFOLIO_SEED_NAMESPACE}
             and item.is_demo_data is False
             for item in seeded
             if item
@@ -145,14 +146,10 @@ def test_opportunity_seed_is_durable_stable_idempotent_and_resettable(db) -> Non
         ).submission_deadline == AS_OF_B + timedelta(hours=20)
         assert fresh.get(Opportunity, ordinary_id) is not None
         assert fresh.get(ActorProfile, PORTFOLIO_PROFILE_ID) is not None
-        for model in (
-            Submission,
-            AuditionCalendarEvent,
-            AuditionJournalEntry,
-            AgentRecommendation,
-            RecommendationFeedback,
-            Asset,
-        ):
+        assert fresh.scalar(select(func.count()).select_from(Submission)) == 3
+        assert fresh.scalar(select(func.count()).select_from(AuditionCalendarEvent)) == 10
+        assert fresh.scalar(select(func.count()).select_from(AuditionJournalEntry)) == 3
+        for model in (AgentRecommendation, RecommendationFeedback, Asset):
             assert fresh.scalar(select(func.count()).select_from(model)) == 0
         assert fresh.scalar(select(func.count()).select_from(CastingGoal)) == 1
         assert fresh.scalar(select(func.count()).select_from(WatchList)) == 1

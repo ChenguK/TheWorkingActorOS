@@ -107,6 +107,31 @@ stretch goal scoring remains neutral. Submission and recommendation-feedback inp
 remain neutral until later tasks. The absent `(actor_profile_id, title)` WatchList unique
 constraint leaves a deferred concurrent-save duplication risk.
 
+## Submission workflow persistence boundary
+
+The seed owns three Submission roots with stable manifest UUIDs. Its create-time allowlist
+is `actor_profile_id`, `opportunity_id`, `current_status`, and `submitted_at`; fees remain
+zero, notes remain absent, and no Assets are attached. `submitted_at` is the only
+Submission temporal field. It is derived from the run's single aware `as_of` on first
+creation and remains stable across ordinary reruns. Existing status and chronology are
+not overwritten after production workflow activity begins.
+
+`SubmissionService.create_without_commit` preserves the public creation workflow while
+leaving the seed as the sole commit owner. Each new root receives one initial
+SubmissionStatusHistory, then the production connector derives Calendar and audition-
+journal records, and ActorWorkEventService derives the actor journal. The actual bounded
+graph is exactly 3 Submissions, 3 histories, 10 Calendar events, 3 audition journals,
+and 3 actor journals. Calendar deduplication uses Opportunity, Submission, event type,
+and start time; audition journals use Submission; actor journals use date, event type,
+title, and linked IDs. Ordinary reruns do not invoke creation for existing roots.
+
+Intentional execution flushes occur once per newly created Submission so its UUID and
+relationships are available to derived writers. No lower layer commits. Scoped reset
+resolves child ownership before deleting Calendar rows, audition journals, actor journals,
+histories, and finally Submission roots. Submission status is now structurally available
+to command-center scoring for the three linked Opportunities. RecommendationFeedback and
+the previously unsupported strategic goal-match context remain neutral.
+
 ## Sanitized-content rules
 
 - All names, projects, roles, locations, identity values, and narrative text are fictional.
